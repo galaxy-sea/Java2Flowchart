@@ -8,24 +8,41 @@
     <name>Java2Flowchart</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+<!--    <vendor url="https://www.yourcompany.com">YourCompany</vendor>-->
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        Enter short description for your plugin here.<br>
-        <em>most HTML tags may be used</em>
+        Java2Flowchart generates a Mermaid flowchart (Markdown) for the selected Java method.<br>
+        Usage: place the caret inside a method and invoke “Generate > Generate Java Flowchart (Markdown)” from the Generate menu or its shortcut (default: Ctrl+Alt+Shift+F, macOS: ⌥⇧⌘F). The .md file is saved under the project root in the Java2Flowchart directory (organized by package path) and includes the Mermaid code plus the current settings for easy preview or copy.
+        <br>
+        Java2Flowchart 将选中的 Java 方法生成 Mermaid 流程图（Markdown）。<br>
+        用法：在方法体内右键或使用快捷键（默认 Ctrl+Alt+Shift+F，macOS 为 ⌥⇧⌘F）触发 “Generate > Generate Java Flowchart (Markdown)”。生成的 .md 文件保存在项目根目录的 Java2Flowchart 目录（按包路径分类），内容包含 Mermaid 代码和当前设置说明，可直接预览或复制到文档中。
     ]]></description>
 
     <!-- Product and plugin compatibility requirements.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.java</depends>
 
     <resource-bundle>messages.MyMessageBundle</resource-bundle>
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow id="MyToolWindow" factoryClass="plus.wcj.jetbrains.plugins.java2flowchart.MyToolWindowFactory"
+        <toolWindow id="Java2Flowchart" factoryClass="plus.wcj.jetbrains.plugins.java2flowchart.MyToolWindowFactory"
                     icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+        <notificationGroup id="Java2Flowchart" displayType="BALLOON" isLogByDefault="true"/>
+        <applicationService serviceImplementation="plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings"/>
+        <applicationConfigurable instance="plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettingsConfigurable"
+                                 displayName="Java2Flowchart"/>
     </extensions>
+    <actions>
+        <action id="plus.wcj.jetbrains.plugins.java2flowchart.GenerateFlowchartAction"
+                class="plus.wcj.jetbrains.plugins.java2flowchart.GenerateFlowchartAction"
+                text="Generate Java Flowchart (Markdown)"
+                description="生成当前方法的Mermaid流程图并存入项目根目录的 Java2Flowchart 文件夹">
+            <add-to-group group-id="GenerateGroup" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt shift F"/>
+        </action>
+    </actions>
 </idea-plugin>
