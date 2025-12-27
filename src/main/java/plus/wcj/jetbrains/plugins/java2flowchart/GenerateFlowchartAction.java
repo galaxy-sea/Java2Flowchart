@@ -200,12 +200,11 @@ public class GenerateFlowchartAction extends DumbAwareAction {
         String label = zh ? "标签最大长度" : "labelMaxLength";
         String lang = zh ? "语言" : "language";
         String useJavadoc = zh ? "使用Javadoc" : "useJavadoc";
-        String foldFluent = zh ? "折叠链式调用" : "foldFluentCalls";
-        String foldNested = zh ? "折叠嵌套调用" : "foldNestedCalls";
         String foldSeq = zh ? "折叠顺序调用" : "foldSequentialCalls";
         String foldSet = zh ? "合并连续的 set" : "foldSeqSetters";
         String foldGet = zh ? "合并连续的 get/is" : "foldSeqGetters";
         String foldCtor = zh ? "合并连续的构造方法" : "foldSeqCtors";
+        String regexTitle = zh ? "正则表达式" : "regex patterns";
         return """
                 - %s
                 - %s: %s
@@ -219,8 +218,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 - %s: %s
                 - %s: %s
                 - %s: %s
-                - %s: %s
-                - %s: %s
+                %s
                 """.formatted(
                 title,
                 merge, state.getMergeCalls(),
@@ -230,13 +228,23 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 label, state.getLabelMaxLength(),
                 useJavadoc, state.getUseJavadocLabels(),
                 lang, state.getLanguage(),
-                foldFluent, state.getFoldFluentCalls(),
-                foldNested, state.getFoldNestedCalls(),
                 foldSeq, state.getFoldSequentialCalls(),
                 foldSet, state.getFoldSequentialSetters(),
                 foldGet, state.getFoldSequentialGetters(),
-                foldCtor, state.getFoldSequentialCtors()
-        ).stripTrailing();
+                foldCtor, state.getFoldSequentialCtors(),
+                formatSkipRegex(state, regexTitle)
+        );
+    }
+
+    private String formatSkipRegex(plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.State state, String title) {
+        var entries = state.getSkipRegexEntries();
+        if (entries == null || entries.isEmpty()) {
+            return "- " + title + ": (none)";
+        }
+        String lines = entries.stream()
+                .map(e -> " - [" + (e.getEnabled() ? "x" : " ") + "] " + e.getPattern())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return "- " + title + ":\n" + lines;
     }
 
     private void notify(Project project, String message, NotificationType type) {

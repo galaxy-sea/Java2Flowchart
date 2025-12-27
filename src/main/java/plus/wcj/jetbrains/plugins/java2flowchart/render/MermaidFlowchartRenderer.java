@@ -358,21 +358,11 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         }
         // Render inline calls first using the same prefix so numbering follows evaluation order.
         Object rawInline = meta.get("inlineCalls");
-        String selfKey = inlineKey(meta);
         if (rawInline instanceof List<?> list) {
-            java.util.Map<String, Map<String, Object>> inlineUnique = new java.util.LinkedHashMap<>();
             for (Object o : list) {
                 if (o instanceof Map<?, ?> m) {
-                    Map<String, Object> mm = (Map<String, Object>) m;
-                    String key = inlineKey(mm);
-                    if (selfKey != null && selfKey.equals(key)) {
-                        continue; // skip duplicate of primary call
-                    }
-                    inlineUnique.putIfAbsent(key, mm);
+                    renderCall(sourceId, (Map<String, Object>) m, lines, mergeCallees, mergedTargets, renderedGraphs, callPrefix, callCounters, null, callEdgesSeen);
                 }
-            }
-            for (Map<String, Object> m : inlineUnique.values()) {
-                renderCall(sourceId, m, lines, mergeCallees, mergedTargets, renderedGraphs, callPrefix, callCounters, null, callEdgesSeen);
             }
         }
         // Allocate index for this call
@@ -496,16 +486,12 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
 
     private boolean isChainEdge(Node from, Node to) {
         if (from == null || to == null) return false;
-        // explicit chain id from splitter
+        // explicit chain id from splitter; only treat as chain if both nodes were produced by chain split
         Object chainA = from.meta().get("fluentChainId");
         Object chainB = to.meta().get("fluentChainId");
-        if (chainA != null && chainA.equals(chainB)) {
-            return true;
-        }
-        if (from.type() != NodeType.CALL || to.type() != NodeType.CALL) return false;
-        String qa = qualifierOf(from.label());
-        String qb = qualifierOf(to.label());
-        return qa != null && qa.equals(qb);
+        boolean splitA = Boolean.TRUE.equals(from.meta().get("chainSplit"));
+        boolean splitB = Boolean.TRUE.equals(to.meta().get("chainSplit"));
+        return chainA != null && chainA.equals(chainB) && splitA && splitB;
     }
 
     private String qualifierOf(String label) {

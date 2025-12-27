@@ -19,13 +19,11 @@ package plus.wcj.jetbrains.plugins.java2flowchart.extract;
 import java.util.ArrayList;
 import java.util.List;
 
-public record ExtractOptions(boolean foldFluentCalls, boolean foldNestedCalls, boolean foldSequentialCalls,
+public record ExtractOptions( boolean foldSequentialCalls,
                              boolean foldSequentialSetters, boolean foldSequentialGetters, boolean foldSequentialCtors,
                              int jdkApiDepth, boolean mergeCalls, int ternaryExpandLevel, int callDepth, boolean useJavadocLabels,
                              List<String> skipRegexes) {
     public static ExtractOptions defaultOptions() {
-        boolean foldFluent = true;
-        boolean foldNested = true;
         boolean foldSeq = true;
         boolean foldSet = true;
         boolean foldGet = true;
@@ -38,8 +36,6 @@ public record ExtractOptions(boolean foldFluentCalls, boolean foldNestedCalls, b
         List<String> skipList = new ArrayList<>();
         try {
             var state = plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.getInstance().getState();
-            foldFluent = state.getFoldFluentCalls();
-            foldNested = state.getFoldNestedCalls();
             foldSeq = state.getFoldSequentialCalls();
             foldSet = state.getFoldSequentialSetters();
             foldGet = state.getFoldSequentialGetters();
@@ -64,6 +60,7 @@ public record ExtractOptions(boolean foldFluentCalls, boolean foldNestedCalls, b
             foldGet = false;
             foldCtor = false;
         }
-        return new ExtractOptions(foldFluent, foldNested, foldSeq, foldSet, foldGet, foldCtor, depth, merge, ternary, callDepth, useJavadoc, skipList);
+        // foldFluentCalls / foldNestedCalls are always treated as enabled
+        return new ExtractOptions( foldSeq, foldSet, foldGet, foldCtor, depth, merge, ternary, callDepth, useJavadoc, skipList);
     }
 }

@@ -38,8 +38,6 @@ import java.awt.BorderLayout
 
 class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
     private val settings = Java2FlowchartSettings.getInstance()
-    private lateinit var foldFluentCheckBox: JBCheckBox
-    private lateinit var foldNestedCheckBox: JBCheckBox
     private lateinit var foldSequentialCheckBox: JBCheckBox
     private lateinit var foldSetCheckBox: JBCheckBox
     private lateinit var foldGetCheckBox: JBCheckBox
@@ -81,9 +79,7 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         val labelModified = (labelMaxSpinner.value as Int) != settings.state.labelMaxLength
         val javadocModified = useJavadocCheckBox.isSelected != settings.state.useJavadocLabels
         val foldDetailModified =
-            foldFluentCheckBox.isSelected != settings.state.foldFluentCalls ||
-                    foldNestedCheckBox.isSelected != settings.state.foldNestedCalls ||
-                    foldSequentialCheckBox.isSelected != settings.state.foldSequentialCalls ||
+            foldSequentialCheckBox.isSelected != settings.state.foldSequentialCalls ||
                     foldSetCheckBox.isSelected != settings.state.foldSequentialSetters ||
                     foldGetCheckBox.isSelected != settings.state.foldSequentialGetters ||
                     foldCtorCheckBox.isSelected != settings.state.foldSequentialCtors
@@ -92,8 +88,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
     }
 
     override fun apply() {
-        settings.state.foldFluentCalls = foldFluentCheckBox.isSelected
-        settings.state.foldNestedCalls = foldNestedCheckBox.isSelected
         settings.state.foldSequentialCalls = foldSequentialCheckBox.isSelected
         settings.state.foldSequentialSetters = foldSetCheckBox.isSelected
         settings.state.foldSequentialGetters = foldGetCheckBox.isSelected
@@ -136,8 +130,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         labelMaxSpinner.toolTipText = labelText
         labelMaxLabel.text = labelText
         useJavadocCheckBox.text = Java2FlowchartBundle.message("settings.use.javadoc", language)
-        foldFluentCheckBox.text = Java2FlowchartBundle.message("settings.fold.fluent", language)
-        foldNestedCheckBox.text = Java2FlowchartBundle.message("settings.fold.nested", language)
         foldSequentialCheckBox.text = Java2FlowchartBundle.message("settings.fold.sequential", language)
         foldSetCheckBox.text = Java2FlowchartBundle.message("settings.fold.seq.set", language)
         foldGetCheckBox.text = Java2FlowchartBundle.message("settings.fold.seq.get", language)
@@ -175,8 +167,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         ternaryLevelSpinner = JBIntSpinner(settings.state.ternaryExpandLevel, -1, 10, 1)
         labelMaxSpinner = JBIntSpinner(settings.state.labelMaxLength, -1, 500, 5)
         useJavadocCheckBox = JBCheckBox()
-        foldFluentCheckBox = JBCheckBox()
-        foldNestedCheckBox = JBCheckBox()
         foldSequentialCheckBox = JBCheckBox()
         foldSetCheckBox = JBCheckBox()
         foldGetCheckBox = JBCheckBox()
@@ -197,8 +187,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         ternaryLevelSpinner.value = settings.state.ternaryExpandLevel
         labelMaxSpinner.value = settings.state.labelMaxLength
         useJavadocCheckBox.isSelected = settings.state.useJavadocLabels
-        foldFluentCheckBox.isSelected = settings.state.foldFluentCalls
-        foldNestedCheckBox.isSelected = settings.state.foldNestedCalls
         foldSequentialCheckBox.isSelected = settings.state.foldSequentialCalls
         foldSetCheckBox.isSelected = settings.state.foldSequentialSetters
         foldGetCheckBox.isSelected = settings.state.foldSequentialGetters
@@ -210,8 +198,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
     private fun buildForm() {
         val formBuilder = FormBuilder.createFormBuilder()
             .addLabeledComponent(languageLabel, languageCombo, 1, false)
-            .addComponent(foldFluentCheckBox)
-            .addComponent(foldNestedCheckBox)
             .addComponent(foldSequentialCheckBox)
             .addComponent(sequentialChildrenPanel())
             .addComponent(mergeCallsCheckBox)
