@@ -165,9 +165,9 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         }
         if (chainEdge) {
             if (label.isBlank()) {
-                return "==>";
+                return "-->";
             }
-            return "== \"" + label + "\" ==>";
+            return "--" + label + "-->";
         }
         if (label.isBlank()) {
             return "-->";

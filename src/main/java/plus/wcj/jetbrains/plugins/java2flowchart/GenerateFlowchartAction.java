@@ -39,7 +39,6 @@ import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
-import plus.wcj.jetbrains.plugins.java2flowchart.extract.ExtractOptions;
 import plus.wcj.jetbrains.plugins.java2flowchart.extract.FlowExtractor;
 import plus.wcj.jetbrains.plugins.java2flowchart.extract.JavaFlowExtractor;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.ControlFlowGraph;
@@ -85,7 +84,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
             return;
         }
 
-        ControlFlowGraph graph = ReadAction.compute(() -> extractor.extract(method, ExtractOptions.defaultOptions()));
+        ControlFlowGraph graph = ReadAction.compute(() -> extractor.extract(method, Java2FlowchartSettings.getInstance().getState()));
         String mermaid = renderer.render(graph, RenderOptions.topDown());
         String source = sourceLink(project, (PsiJavaFile) psiFile, method);
         String content = """
@@ -199,6 +198,8 @@ public class GenerateFlowchartAction extends DumbAwareAction {
         String ternary = zh ? "三元展开层级" : "ternaryExpandLevel";
         String label = zh ? "标签最大长度" : "labelMaxLength";
         String lang = zh ? "语言" : "language";
+        String foldFluent = zh ? "合并链式调用" : "foldFluentCalls";
+        String foldNested = zh ? "合并嵌套调用" : "foldNestedCalls";
         String useJavadoc = zh ? "使用Javadoc" : "useJavadoc";
         String foldSeq = zh ? "折叠顺序调用" : "foldSequentialCalls";
         String foldSet = zh ? "合并连续的 set" : "foldSeqSetters";
@@ -218,6 +219,8 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 - %s: %s
                 - %s: %s
                 - %s: %s
+                - %s: %s
+                - %s: %s
                 %s
                 """.formatted(
                 title,
@@ -228,6 +231,8 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 label, state.getLabelMaxLength(),
                 useJavadoc, state.getUseJavadocLabels(),
                 lang, state.getLanguage(),
+                foldFluent, state.getFoldFluentCalls(),
+                foldNested, state.getFoldNestedCalls(),
                 foldSeq, state.getFoldSequentialCalls(),
                 foldSet, state.getFoldSequentialSetters(),
                 foldGet, state.getFoldSequentialGetters(),
@@ -238,7 +243,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
 
     private String formatSkipRegex(plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.State state, String title) {
         var entries = state.getSkipRegexEntries();
-        if (entries == null || entries.isEmpty()) {
+        if (entries.isEmpty()) {
             return "- " + title + ": (none)";
         }
         String lines = entries.stream()

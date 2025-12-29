@@ -25,38 +25,85 @@ import plus.wcj.jetbrains.plugins.java2flowchart.ir.Edge;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.EdgeType;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.Node;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.NodeType;
+import plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings;
 
 import com.intellij.psi.JavaRecursiveElementWalkingVisitor;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+
+import java.util.*;
 import java.util.function.Supplier;
+
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiNewExpression;
+
 import java.util.stream.Collectors;
 
 public class JavaFlowExtractor implements FlowExtractor {
     private static final Logger LOG = Logger.getInstance(JavaFlowExtractor.class);
 
     @Override
-    public ControlFlowGraph extract(PsiMethod method, ExtractOptions options) {
+    public ControlFlowGraph extract(PsiMethod method, Java2FlowchartSettings.State state) {
         Objects.requireNonNull(method, "method");
-        ExtractOptions safeOptions = options == null ? ExtractOptions.defaultOptions() : options;
+        Java2FlowchartSettings.State safeState = state != null
+                ? copyState(state)
+                : copyState(defaultState());
         PsiCodeBlock body = method.getBody();
         java.util.Set<PsiMethod> visited = new java.util.HashSet<>();
         visited.add(method);
-        Builder builder = new Builder(safeOptions, method, visited);
+        Builder builder = new Builder(safeState, method, visited);
         return builder.build(method, body);
     }
 
+    private static Java2FlowchartSettings.State defaultState() {
+        try {
+            return Java2FlowchartSettings.getInstance().getState();
+        } catch (Throwable ignored) {
+            return new Java2FlowchartSettings.State();
+        }
+    }
+
+    private static Java2FlowchartSettings.State copyState(Java2FlowchartSettings.State s) {
+        Java2FlowchartSettings.State copy = new Java2FlowchartSettings.State(
+                s.getFoldFluentCalls(),
+                s.getFoldNestedCalls(),
+                s.getFoldSequentialCalls(),
+                s.getFoldSequentialSetters(),
+                s.getFoldSequentialGetters(),
+                s.getFoldSequentialCtors(),
+                s.getLanguage(),
+                s.getJdkApiDepth(),
+                s.getMergeCalls(),
+                s.getCallDepth(),
+                s.getUseJavadocLabels(),
+                new java.util.ArrayList<>(),
+                s.getTernaryExpandLevel(),
+                s.getLabelMaxLength()
+        );
+        List<Java2FlowchartSettings.SkipRegexEntry> copied = new ArrayList<>();
+        for (Java2FlowchartSettings.SkipRegexEntry entry : s.getSkipRegexEntries()) {
+            copied.add(new Java2FlowchartSettings.SkipRegexEntry(entry.getEnabled(), entry.getPattern()));
+        }
+        copy.setSkipRegexEntries(copied);
+        return copy;
+    }
+
     private static final class Builder {
-        private enum CallKind { SET, GET, CTOR, OTHER }
-        private final ExtractOptions options;
+        private enum CallKind {SET, GET, CTOR, OTHER}
+
+        private enum CallRelationType {FLUENT, NESTED}
+
+        private final Java2FlowchartSettings.State state;
+        private final boolean foldFluentCalls;
+        private final boolean foldNestedCalls;
+        private final boolean foldSequentialCalls;
+        private final boolean foldSequentialSetters;
+        private final boolean foldSequentialGetters;
+        private final boolean foldSequentialCtors;
+        private final boolean mergeCalls;
+        private final int ternaryExpandLevel;
+        private final int callDepth;
+        private final int jdkApiDepth;
+        private final boolean useJavadocLabels;
+        private final List<String> skipRegexes;
         private final PsiMethod owner;
         private final java.util.Set<PsiMethod> visited;
         private final List<Node> nodes = new ArrayList<>();
@@ -69,8 +116,33 @@ public class JavaFlowExtractor implements FlowExtractor {
         private final com.intellij.openapi.editor.Document document;
         private final Map<Integer, Integer> lineCounters = new HashMap<>();
 
-        Builder(ExtractOptions options, PsiMethod owner, java.util.Set<PsiMethod> visited) {
-            this.options = options;
+        private List<String> filterSkipRegexes(List<Java2FlowchartSettings.SkipRegexEntry> entries) {
+            if (entries == null || entries.isEmpty()) {
+                return List.of();
+            }
+            List<String> patterns = new ArrayList<>();
+            for (Java2FlowchartSettings.SkipRegexEntry entry : entries) {
+                if (entry.getEnabled() && !entry.getPattern().isBlank()) {
+                    patterns.add(entry.getPattern());
+                }
+            }
+            return patterns;
+        }
+
+        Builder(Java2FlowchartSettings.State state, PsiMethod owner, java.util.Set<PsiMethod> visited) {
+            this.state = state;
+            this.foldFluentCalls = state.getFoldFluentCalls();
+            this.foldNestedCalls = state.getFoldNestedCalls();
+            this.foldSequentialCalls = state.getFoldSequentialCalls();
+            this.foldSequentialSetters = state.getFoldSequentialSetters();
+            this.foldSequentialGetters = state.getFoldSequentialGetters();
+            this.foldSequentialCtors = state.getFoldSequentialCtors();
+            this.mergeCalls = state.getMergeCalls();
+            this.ternaryExpandLevel = state.getTernaryExpandLevel();
+            this.callDepth = state.getCallDepth();
+            this.jdkApiDepth = state.getJdkApiDepth();
+            this.useJavadocLabels = state.getUseJavadocLabels();
+            this.skipRegexes = filterSkipRegexes(state.getSkipRegexEntries());
             this.owner = owner;
             this.visited = visited;
             this.document = com.intellij.psi.PsiDocumentManager.getInstance(owner.getProject()).getDocument(owner.getContainingFile());
@@ -84,15 +156,14 @@ public class JavaFlowExtractor implements FlowExtractor {
                 tails = processStatements(Arrays.asList(body.getStatements()), tails);
             }
             connectToEnd(tails);
-            if (options.foldSequentialCalls()
-                    || options.foldSequentialSetters() || options.foldSequentialGetters() || options.foldSequentialCtors()) {
+            if (foldSequentialCalls || foldSequentialSetters || foldSequentialGetters || foldSequentialCtors) {
                 foldLinearActions();
             }
             return new ControlFlowGraph(startId, endId, nodes, edges);
         }
-        
+
         private String methodSummary(PsiMethod method) {
-            String fallback =  method.getName();
+            String fallback = method.getName();
             PsiDocComment doc = method.getDocComment();
             if (doc == null) {
                 return fallback;
@@ -112,7 +183,7 @@ public class JavaFlowExtractor implements FlowExtractor {
         }
 
         private String callSummary(PsiMethod method) {
-            if (!options.useJavadocLabels()) {
+            if (!useJavadocLabels) {
                 return "";
             }
             PsiDocComment doc = method.getDocComment();
@@ -131,18 +202,6 @@ public class JavaFlowExtractor implements FlowExtractor {
                 return desc.substring(0, dot + 1).trim();
             }
             return desc;
-        }
-
-        private String methodDisplay(PsiMethod method) {
-            String qname = method.getContainingClass() != null ? method.getContainingClass().getQualifiedName() : "";
-            String params = Arrays.stream(method.getParameterList().getParameters())
-                    .map(p -> p.getType().getPresentableText())
-                    .collect(Collectors.joining(", "));
-            String base = method.getName() + "(" + params + ")";
-            if (qname == null || qname.isBlank()) {
-                return base;
-            }
-            return qname + "#" + base;
         }
 
         private record CallInfo(NodeType type, String label, Map<String, Object> meta) {
@@ -222,7 +281,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                 extras.put("inlineCalls", inlineCalls);
             }
             String decisionId = addNode(NodeType.DECISION, labelFrom(ifStatement.getCondition(), "if (?)"), ifStatement.getTextRange(), extras);
-            link(incoming, decisionId, EdgeType.NORMAL, null);
+            link(incoming, decisionId);
 
             List<Endpoint> thenIncoming = List.of(new Endpoint(decisionId, EdgeType.TRUE, "true"));
             PsiStatement elseBranch = ifStatement.getElseBranch();
@@ -262,13 +321,13 @@ public class JavaFlowExtractor implements FlowExtractor {
             }
             String headId = addNode(NodeType.LOOP_HEAD, labelFrom(whileStatement.getCondition(), "while (?)"), whileStatement.getTextRange(), extras);
             String afterLoop = addNode(NodeType.MERGE, "", whileStatement.getTextRange());
-            link(incoming, headId, EdgeType.NORMAL, null);
+            link(incoming, headId);
 
             loopStack.push(new LoopContext(headId, afterLoop));
             List<Endpoint> bodyExits = handleStatement(whileStatement.getBody(), List.of(new Endpoint(headId, EdgeType.TRUE, "true")));
             loopStack.pop();
 
-            link(bodyExits, headId, EdgeType.NORMAL, null);
+            link(bodyExits, headId);
             edges.add(new Edge(headId, afterLoop, EdgeType.FALSE, "false"));
             return List.of(new Endpoint(afterLoop, EdgeType.NORMAL, null));
         }
@@ -288,7 +347,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             String bodyEntry = findBodyEntry(incoming, edgeStart);
             loopStack.pop();
 
-            link(bodyExits, headId, EdgeType.NORMAL, null);
+            link(bodyExits, headId);
             if (bodyEntry != null) {
                 edges.add(new Edge(headId, bodyEntry, EdgeType.TRUE, "true"));
             }
@@ -325,7 +384,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             }
             String headId = addNode(NodeType.LOOP_HEAD, conditionLabel, forStatement.getTextRange(), extras);
             String afterLoop = addNode(NodeType.MERGE, "", forStatement.getTextRange());
-            link(afterInit, headId, EdgeType.NORMAL, null);
+            link(afterInit, headId);
 
             loopStack.push(new LoopContext(headId, afterLoop));
             List<Endpoint> bodyExits = handleStatement(forStatement.getBody(), List.of(new Endpoint(headId, EdgeType.TRUE, "true")));
@@ -336,7 +395,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             if (update != null && !(update instanceof PsiEmptyStatement)) {
                 updateExits = handleStatement(update, bodyExits);
             }
-            link(updateExits, headId, EdgeType.NORMAL, null);
+            link(updateExits, headId);
             edges.add(new Edge(headId, afterLoop, EdgeType.FALSE, "false"));
             return List.of(new Endpoint(afterLoop, EdgeType.NORMAL, null));
         }
@@ -344,13 +403,13 @@ public class JavaFlowExtractor implements FlowExtractor {
         private List<Endpoint> handleForeach(PsiForeachStatement foreachStatement, List<Endpoint> incoming) {
             String headId = addNode(NodeType.LOOP_HEAD, "for (" + safeLabel(foreachStatement.getIterationParameter().getName()) + " : " + labelFrom(foreachStatement.getIteratedValue(), "?") + ")", foreachStatement.getTextRange());
             String afterLoop = addNode(NodeType.MERGE, "", foreachStatement.getTextRange());
-            link(incoming, headId, EdgeType.NORMAL, null);
+            link(incoming, headId);
 
             loopStack.push(new LoopContext(headId, afterLoop));
             List<Endpoint> bodyExits = handleStatement(foreachStatement.getBody(), List.of(new Endpoint(headId, EdgeType.TRUE, "next")));
             loopStack.pop();
 
-            link(bodyExits, headId, EdgeType.NORMAL, null);
+            link(bodyExits, headId);
             edges.add(new Edge(headId, afterLoop, EdgeType.FALSE, "done"));
             return List.of(new Endpoint(afterLoop, EdgeType.NORMAL, null));
         }
@@ -361,11 +420,11 @@ public class JavaFlowExtractor implements FlowExtractor {
             PsiExpression expr = unwrap(exprRaw);
             if (expr == null) {
                 String returnId = addNode(NodeType.RETURN, label, returnStatement.getTextRange());
-                link(incoming, returnId, EdgeType.NORMAL, null);
+                link(incoming, returnId);
                 connectReturnEndpoints(List.of(new Endpoint(returnId, EdgeType.NORMAL, null)));
                 return List.of();
             }
-            List<Endpoint> exits = buildReturnExpr(expr, incoming, returnStatement.getTextRange(), options.ternaryExpandLevel());
+            List<Endpoint> exits = buildReturnExpr(expr, incoming, returnStatement.getTextRange(), ternaryExpandLevel);
             connectReturnEndpoints(exits);
             return List.of();
         }
@@ -374,7 +433,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             Map<String, Object> meta = new HashMap<>();
             meta.put("noFold", true);
             String breakId = addNode(NodeType.ACTION, "break", breakStatement.getTextRange(), meta);
-            link(incoming, breakId, EdgeType.NORMAL, null);
+            link(incoming, breakId);
             LoopContext loop = loopStack.peek();
             if (loop == null) {
                 LOG.warn("break outside loop at " + safeLabel(breakStatement.getText()));
@@ -386,7 +445,7 @@ public class JavaFlowExtractor implements FlowExtractor {
 
         private List<Endpoint> handleContinue(PsiStatement continueStatement, List<Endpoint> incoming) {
             String continueId = addNode(NodeType.ACTION, "continue", continueStatement.getTextRange());
-            link(incoming, continueId, EdgeType.NORMAL, null);
+            link(incoming, continueId);
             LoopContext loop = loopStack.peek();
             if (loop == null) {
                 LOG.warn("continue outside loop at " + safeLabel(continueStatement.getText()));
@@ -398,7 +457,7 @@ public class JavaFlowExtractor implements FlowExtractor {
 
         private List<Endpoint> handleSwitch(PsiSwitchStatement switchStatement, List<Endpoint> incoming) {
             String switchId = addNode(NodeType.DECISION, "switch " + labelFrom(switchStatement.getExpression(), "?"), switchStatement.getTextRange());
-            link(incoming, switchId, EdgeType.NORMAL, null);
+            link(incoming, switchId);
             String mergeId = addNode(NodeType.MERGE, "end switch", switchStatement.getTextRange());
             PsiCodeBlock body = switchStatement.getBody();
             if (body == null) {
@@ -419,7 +478,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                     if (exits.isEmpty() && !hasTerminal) {
                         edges.add(new Edge(caseId, mergeId, EdgeType.NORMAL, null));
                     } else {
-                        link(exits, mergeId, EdgeType.NORMAL, null);
+                        link(exits, mergeId);
                     }
                 }
             }
@@ -431,7 +490,7 @@ public class JavaFlowExtractor implements FlowExtractor {
         private List<Endpoint> handleThrow(PsiThrowStatement throwStatement, List<Endpoint> incoming) {
             String label = "throw " + labelFrom(throwStatement.getException(), "?");
             String throwId = addNode(NodeType.THROW, label, throwStatement.getTextRange());
-            link(incoming, throwId, EdgeType.NORMAL, null);
+            link(incoming, throwId);
             edges.add(new Edge(throwId, endId, EdgeType.EXCEPTION, null));
             if (!switchMergeStack.isEmpty()) {
                 edges.add(new Edge(throwId, switchMergeStack.peek(), EdgeType.RETURN, "throw"));
@@ -536,7 +595,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                 extras.put("inlineCalls", inlineCalls);
             }
             String decisionId = addNode(NodeType.DECISION, labelFrom(condition, "?"), range, extras);
-            link(incoming, decisionId, EdgeType.NORMAL, null);
+            link(incoming, decisionId);
             int nextDepth = expandDepth < 0 ? -1 : Math.max(0, expandDepth - 1);
             List<Endpoint> exits = new ArrayList<>();
             PsiExpression thenExpr = unwrap(conditional.getThenExpression());
@@ -570,7 +629,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             if (expr instanceof PsiConditionalExpression conditional && expandTernary) {
                 PsiExpression condition = unwrap(conditional.getCondition());
                 String decisionId = addNode(NodeType.DECISION, labelFrom(condition, "?"), conditional.getTextRange());
-                link(incoming, decisionId, EdgeType.NORMAL, null);
+                link(incoming, decisionId);
                 List<Endpoint> result = new ArrayList<>();
                 PsiExpression thenExpr = unwrap(conditional.getThenExpression());
                 PsiExpression elseExpr = unwrap(conditional.getElseExpression());
@@ -592,7 +651,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                         meta.put("inlineCalls", inlineCalls);
                     }
                     String callId = addNode(call.type(), "return " + call.label(), expr.getTextRange(), meta);
-                    link(incoming, callId, EdgeType.NORMAL, null);
+                    link(incoming, callId);
                     return List.of(new Endpoint(callId, EdgeType.NORMAL, null));
                 }
             }
@@ -603,7 +662,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                 meta.put("inlineCalls", inlineCalls);
             }
             String returnId = addNode(NodeType.RETURN, "return " + labelFrom(expr, "?"), fallbackRange != null ? fallbackRange : expr.getTextRange(), meta);
-            link(incoming, returnId, EdgeType.NORMAL, null);
+            link(incoming, returnId);
             return List.of(new Endpoint(returnId, EdgeType.NORMAL, null));
         }
 
@@ -686,12 +745,13 @@ public class JavaFlowExtractor implements FlowExtractor {
             SwitchGraph sg = buildSwitchGraph(switchExpression, nextDepth, range);
             String returnId = addNode(NodeType.RETURN, "return switch", range);
             // 返回节点直接接在上游语句后面，虚线指向 switch 以示取值来源
-            link(incoming, returnId, EdgeType.NORMAL, null);
+            link(incoming, returnId);
             edges.add(new Edge(returnId, sg.switchId(), EdgeType.RETURN, "switch"));
             return List.of(new Endpoint(returnId, EdgeType.NORMAL, null));
         }
 
-        private record SwitchGraph(String switchId, String mergeId) {}
+        private record SwitchGraph(String switchId, String mergeId) {
+        }
 
         private SwitchGraph buildSwitchGraph(PsiSwitchExpression switchExpression, int nextDepth, TextRange range) {
             String switchId = addNode(NodeType.DECISION, "switch " + labelFrom(switchExpression.getExpression(), "?"), range);
@@ -706,11 +766,11 @@ public class JavaFlowExtractor implements FlowExtractor {
                         edges.add(new Edge(switchId, caseId, EdgeType.NORMAL, null));
                         List<Endpoint> starts = List.of(new Endpoint(caseId, EdgeType.NORMAL, null));
                         List<Endpoint> exits = handleSwitchRule(rule, starts, nextDepth);
-                        link(exits, mergeId, EdgeType.NORMAL, null);
+                        link(exits, mergeId);
                     } else if (stmt instanceof PsiSwitchLabelStatementBase label) {
                         String caseId = addNode(NodeType.DECISION, labelText(label), label.getTextRange());
                         edges.add(new Edge(switchId, caseId, EdgeType.NORMAL, null));
-                        link(List.of(new Endpoint(caseId, EdgeType.NORMAL, null)), mergeId, EdgeType.NORMAL, null);
+                        link(List.of(new Endpoint(caseId, EdgeType.NORMAL, null)), mergeId);
                     }
                 }
             }
@@ -726,7 +786,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                     return handleConditionalExpression(conditional, incoming, expr.getTextRange(), nextDepth);
                 }
                 String actionId = addNode(NodeType.ACTION, safeLabel(expr.getText()), exprStmt.getTextRange());
-                link(incoming, actionId, EdgeType.NORMAL, null);
+                link(incoming, actionId);
                 return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
             }
             if (body instanceof PsiBlockStatement blockStmt) {
@@ -739,11 +799,11 @@ public class JavaFlowExtractor implements FlowExtractor {
                     return handleConditionalExpression(conditional, incoming, expr.getTextRange(), nextDepth);
                 }
                 String actionId = addNode(NodeType.ACTION, "yield " + labelFrom(expr, "?"), yield.getTextRange());
-                link(incoming, actionId, EdgeType.NORMAL, null);
+                link(incoming, actionId);
                 return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
             }
             String actionId = addNode(NodeType.ACTION, safeLabel(rule.getText()), rule.getTextRange());
-            link(incoming, actionId, EdgeType.NORMAL, null);
+            link(incoming, actionId);
             return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
         }
 
@@ -769,7 +829,7 @@ public class JavaFlowExtractor implements FlowExtractor {
 
         private List<Endpoint> handleTry(PsiTryStatement tryStatement, List<Endpoint> incoming) {
             String tryId = addNode(NodeType.ACTION, "try", tryStatement.getTryBlock() != null ? tryStatement.getTryBlock().getTextRange() : tryStatement.getTextRange());
-            link(incoming, tryId, EdgeType.NORMAL, null);
+            link(incoming, tryId);
             List<Endpoint> normalExit = tryStatement.getTryBlock() != null
                     ? processStatements(Arrays.asList(tryStatement.getTryBlock().getStatements()), List.of(new Endpoint(tryId, EdgeType.NORMAL, null)))
                     : List.of(new Endpoint(tryId, EdgeType.NORMAL, null));
@@ -791,7 +851,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                 sources.addAll(normalExit);
                 sources.addAll(catchExits);
                 String finallyId = addNode(NodeType.ACTION, "finally", finallyBlock.getTextRange());
-                link(sources, finallyId, EdgeType.NORMAL, null);
+                link(sources, finallyId);
                 finallyExits.addAll(processStatements(Arrays.asList(finallyBlock.getStatements()), List.of(new Endpoint(finallyId, EdgeType.NORMAL, null))));
             } else {
                 finallyExits.addAll(normalExit);
@@ -808,6 +868,22 @@ public class JavaFlowExtractor implements FlowExtractor {
                 for (PsiElement elem : decl.getDeclaredElements()) {
                     if (elem instanceof PsiLocalVariable var) {
                         PsiExpression init = var.getInitializer();
+                        if (init instanceof PsiMethodCallExpression initCall && (!foldFluentCalls && !foldNestedCalls)) {
+                            String lhs = var.getType().getPresentableText() + " " + var.getName() + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhs, decl.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldWithNested(initCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), decl.getTextRange(), lhsId, false, true);
+                        } else if (init instanceof PsiMethodCallExpression initCall && (!foldNestedCalls)) {
+                            String lhs = var.getType().getPresentableText() + " " + var.getName() + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhs, decl.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldWithNested(initCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), decl.getTextRange(), lhsId, false, false);
+                        } else if (init instanceof PsiMethodCallExpression initCall && (!foldFluentCalls)) {
+                            String lhs = var.getType().getPresentableText() + " " + var.getName() + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhs, decl.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldForFluent(initCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), decl.getTextRange(), lhsId, false);
+                        }
                         if (containsGetter(init)) {
                             meta = meta == null ? new HashMap<>() : meta;
                             meta.put("isGetter", true);
@@ -816,17 +892,17 @@ public class JavaFlowExtractor implements FlowExtractor {
                             meta = meta == null ? new HashMap<>() : meta;
                             meta.put("isCtor", true);
                         }
-                        int depth = options.ternaryExpandLevel();
+                        int depth = ternaryExpandLevel;
                         if (init instanceof PsiConditionalExpression cond && depth != 0) {
                             String lhsLabel = var.getType().getPresentableText() + " " + var.getName() + " = ...";
                             String lhsId = addNode(NodeType.ACTION, lhsLabel, decl.getTextRange());
                             return handleConditionalExpression(cond, List.of(new Endpoint(lhsId, EdgeType.RETURN, "=")), decl.getTextRange(), depth);
                         }
                         if (init instanceof PsiSwitchExpression switchExpr) {
-                            SwitchGraph sg = buildSwitchGraph(switchExpr, options.ternaryExpandLevel(), init.getTextRange());
+                            SwitchGraph sg = buildSwitchGraph(switchExpr, ternaryExpandLevel, init.getTextRange());
                             String declLabel = var.getType().getPresentableText() + " " + var.getName() + " = switch";
                             String actionId = addNode(NodeType.ACTION, declLabel, decl.getTextRange());
-                            link(incoming, actionId, EdgeType.NORMAL, null);
+                            link(incoming, actionId);
                             edges.add(new Edge(actionId, sg.switchId(), EdgeType.RETURN, "switch"));
                             return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
                         }
@@ -841,16 +917,16 @@ public class JavaFlowExtractor implements FlowExtractor {
             if (statement instanceof PsiExpressionStatement exprStmt) {
                 PsiExpression expression = exprStmt.getExpression();
                 if (expression instanceof PsiConditionalExpression conditional) {
-                    int depth = options.ternaryExpandLevel();
+                    int depth = ternaryExpandLevel;
                     if (depth != 0) {
                         return handleConditionalExpression(conditional, incoming, statement.getTextRange(), depth);
                     }
                     String actionId = addNode(NodeType.ACTION, safeLabel(expression.getText()), statement.getTextRange());
-                    link(incoming, actionId, EdgeType.NORMAL, null);
+                    link(incoming, actionId);
                     return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
                 }
                 if (expression instanceof PsiAssignmentExpression assign && assign.getRExpression() instanceof PsiConditionalExpression cond) {
-                    int depth = options.ternaryExpandLevel();
+                    int depth = ternaryExpandLevel;
                     if (depth != 0) {
                         String lhsLabel = safeLabel(assign.getLExpression().getText()) + " = ...";
                         String lhsId = addNode(NodeType.ACTION, lhsLabel, statement.getTextRange());
@@ -861,16 +937,32 @@ public class JavaFlowExtractor implements FlowExtractor {
                     // unfold nested calls on RHS（在需要时展开：若未折叠嵌套或需要收集调用信息）
                     PsiExpression rhs = assign2.getRExpression();
                     if (rhs instanceof PsiMethodCallExpression rhsCall) {
+                        if (!foldFluentCalls && !foldNestedCalls) {
+                            String lhsLabel = safeLabel(assign2.getLExpression().getText()) + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhsLabel, statement.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldWithNested(rhsCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), statement.getTextRange(), lhsId, false, true);
+                        } else if (!foldNestedCalls) {
+                            String lhsLabel = safeLabel(assign2.getLExpression().getText()) + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhsLabel, statement.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldWithNested(rhsCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), statement.getTextRange(), lhsId, false, false);
+                        } else if (!foldFluentCalls) {
+                            String lhsLabel = safeLabel(assign2.getLExpression().getText()) + " = ...";
+                            String lhsId = addNode(NodeType.ACTION, lhsLabel, statement.getTextRange());
+                            link(incoming, lhsId);
+                            return handleMethodCallUnfoldForFluent(rhsCall, List.of(new Endpoint(lhsId, EdgeType.NORMAL, null)), statement.getTextRange(), lhsId, false);
+                        }
                         String lhsLabel = safeLabel(assign2.getLExpression().getText()) + " = ...";
                         String lhsId = addNode(NodeType.ACTION, lhsLabel, statement.getTextRange());
-                        link(incoming, lhsId, EdgeType.NORMAL, null);
+                        link(incoming, lhsId);
                         List<Endpoint> current = List.of(new Endpoint(lhsId, EdgeType.NORMAL, null));
                         CallInfo call = buildCallInfo(rhsCall);
                         if (call == null) {
                             return incoming;
                         }
                         String callId = addNode(call.type(), call.label(), rhsCall.getTextRange(), call.meta());
-                        link(current, callId, EdgeType.NORMAL, null);
+                        link(current, callId);
                         return List.of(new Endpoint(callId, EdgeType.NORMAL, null));
                     }
                     if (containsGetter(assign2.getRExpression())) {
@@ -880,6 +972,16 @@ public class JavaFlowExtractor implements FlowExtractor {
                 }
                 List<Map<String, Object>> metaFromChainInline = new ArrayList<>();
                 if (expression instanceof PsiMethodCallExpression callExpression) {
+                    if (!foldFluentCalls && !foldNestedCalls) {
+                        return handleMethodCallUnfoldWithNested(callExpression, incoming, statement.getTextRange(), null, true, true);
+                    } else if (!foldNestedCalls) {
+                        return handleMethodCallUnfoldWithNested(callExpression, incoming, statement.getTextRange(), null, true, false);
+                    } else if (!foldFluentCalls) {
+                        String baseLabel = safeLabel(expression.getText());
+                        String baseId = addNode(NodeType.ACTION, baseLabel, statement.getTextRange());
+                        link(incoming, baseId);
+                        return handleMethodCallUnfoldForFluent(callExpression, List.of(new Endpoint(baseId, EdgeType.NORMAL, null)), statement.getTextRange(), baseId, true);
+                    }
                     // 处理链式调用：未折叠时拆分，折叠时仍收集全部调用信息到 inlineCalls
                     {
                         List<PsiMethodCallExpression> chain = new ArrayList<>();
@@ -894,7 +996,7 @@ public class JavaFlowExtractor implements FlowExtractor {
                             }
                         }
                         // 折叠链式调用时，收集整个链的调用信息为 inlineCalls，保留主节点
-                        if (chain.size() > 1 ) {
+                        if (chain.size() > 1) {
                             List<Map<String, Object>> chainInline = new ArrayList<>();
                             for (PsiMethodCallExpression mc : chain) {
                                 CallInfo ci = buildCallInfo(mc);
@@ -980,16 +1082,16 @@ public class JavaFlowExtractor implements FlowExtractor {
                         return incoming;
                     }
                 } else if (expression instanceof PsiAssignmentExpression assign && assign.getRExpression() instanceof PsiSwitchExpression) {
-                    SwitchGraph sg = buildSwitchGraph((PsiSwitchExpression) assign.getRExpression(), options.ternaryExpandLevel(), expression.getTextRange());
+                    SwitchGraph sg = buildSwitchGraph((PsiSwitchExpression) assign.getRExpression(), ternaryExpandLevel, expression.getTextRange());
                     String lhs = safeLabel(assign.getLExpression().getText());
                     String actionId = addNode(NodeType.ACTION, lhs + " = switch", statement.getTextRange());
-                    link(incoming, actionId, EdgeType.NORMAL, null);
+                    link(incoming, actionId);
                     edges.add(new Edge(actionId, sg.switchId(), EdgeType.RETURN, "switch"));
                     return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
                 } else if (expression instanceof PsiSwitchExpression switchExpr) {
-                    SwitchGraph sg = buildSwitchGraph(switchExpr, options.ternaryExpandLevel(), expression.getTextRange());
+                    SwitchGraph sg = buildSwitchGraph(switchExpr, ternaryExpandLevel, expression.getTextRange());
                     String actionId = addNode(NodeType.ACTION, "switch", statement.getTextRange());
-                    link(incoming, actionId, EdgeType.NORMAL, null);
+                    link(incoming, actionId);
                     edges.add(new Edge(actionId, sg.switchId(), EdgeType.RETURN, "switch"));
                     return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
                 } else {
@@ -1005,8 +1107,385 @@ public class JavaFlowExtractor implements FlowExtractor {
                 }
             }
             String actionId = addNode(type, label, statement.getTextRange(), meta);
-            link(incoming, actionId, EdgeType.NORMAL, null);
+            link(incoming, actionId);
             return List.of(new Endpoint(actionId, EdgeType.NORMAL, null));
+        }
+
+        private List<Endpoint> handleMethodCallUnfoldForFluent(PsiMethodCallExpression root,
+                                                               List<Endpoint> incoming,
+                                                               TextRange range,
+                                                               String baseId,
+                                                               boolean replaceAnchorLabelWhenNoEllipsis) {
+            String anchorId = baseId;
+            if (anchorId == null) {
+                anchorId = addNode(NodeType.ACTION, safeLabel(root.getText()), range);
+                link(incoming, anchorId);
+            } else {
+                boolean alreadyLinked = false;
+                for (Endpoint e : incoming) {
+                    if (anchorId.equals(e.from())) {
+                        alreadyLinked = true;
+                        break;
+                    }
+                }
+                if (!alreadyLinked) {
+                    link(incoming, anchorId);
+                }
+            }
+
+            boolean includeFluent = !foldFluentCalls;
+            CallGraph graph = collectCallGraphForFluent(root, includeFluent);
+            java.util.Map<PsiMethodCallExpression, String> idMap = new java.util.LinkedHashMap<>();
+            java.util.Set<PsiMethodCallExpression> remaining = new java.util.LinkedHashSet<>(graph.order());
+            java.util.List<PsiMethodCallExpression> creationOrder = new java.util.ArrayList<>();
+            for (PsiMethodCallExpression call : collectNestedCalls(root)) {
+                if (remaining.remove(call)) {
+                    creationOrder.add(call);
+                }
+            }
+            creationOrder.addAll(remaining); // any call not covered by nested traversal
+            CallInfo mergedIntoAnchor = null;
+            boolean markChainSplit = includeFluent && (graph.order().size() > 1
+                    || graph.relations().stream().anyMatch(r -> r.type() == CallRelationType.FLUENT));
+            for (PsiMethodCallExpression call : creationOrder) {
+                CallInfo info = buildCallInfo(call);
+                if (info == null) {
+                    continue;
+                }
+                Map<String, Object> meta = info.meta() != null ? new HashMap<>(info.meta()) : new HashMap<>();
+                if (markChainSplit) {
+                    meta.put("chainSplit", true);
+                }
+                List<Map<String, Object>> inlineCalls = collectCallsFromArguments(call);
+                if (!inlineCalls.isEmpty()) {
+                    meta.put("inlineCalls", inlineCalls);
+                }
+                if (mergedIntoAnchor == null && includeFluent) {
+                    mergedIntoAnchor = new CallInfo(info.type(), info.label(), meta);
+                    continue; // first call merged into anchor node
+                }
+                String labelText = info.label();
+                if (includeFluent) {
+                    labelText = shortCallLabel(call);
+                }
+                if (includeFluent && !labelText.startsWith("...")) {
+                    labelText = "..." + labelText;
+                }
+                String id = addNode(info.type(), labelText, call.getTextRange(), meta);
+                idMap.put(call, id);
+            }
+            if (mergedIntoAnchor != null) {
+                mergeFirstCallIntoAnchor(anchorId, mergedIntoAnchor, replaceAnchorLabelWhenNoEllipsis);
+            }
+
+            if (idMap.isEmpty()) {
+                return List.of(new Endpoint(anchorId, EdgeType.NORMAL, null));
+            }
+
+            java.util.Map<PsiMethodCallExpression, CallRelationType> firstRelationType = new java.util.HashMap<>();
+            for (CallRelation relation : graph.relations()) {
+                firstRelationType.putIfAbsent(relation.child(), relation.type());
+            }
+
+            java.util.List<PsiMethodCallExpression> evalOrder = collectNestedCalls(root).stream()
+                    .filter(idMap::containsKey)
+                    .filter(c -> includeFluent)
+                    .toList();
+            if (evalOrder.isEmpty()) {
+                evalOrder = idMap.keySet().stream().toList();
+            }
+            int fluentIdx = 0;
+            int nestedIdx = 0;
+            for (int i = 0; i < evalOrder.size(); i++) {
+                PsiMethodCallExpression call = evalOrder.get(i);
+                CallRelationType relType = firstRelationType.getOrDefault(call, CallRelationType.FLUENT);
+                String labelText;
+                if (relType == CallRelationType.NESTED) {
+                    nestedIdx++;
+                    labelText = "nested:" + nestedIdx;
+                } else {
+                    fluentIdx++;
+                    labelText = "fluent:" + fluentIdx;
+                }
+                String from = i == 0 ? anchorId : idMap.get(evalOrder.get(i - 1));
+                String to = idMap.get(call);
+                if (from != null && to != null) {
+                    edges.add(new Edge(from, to, EdgeType.NORMAL, labelText));
+                }
+            }
+
+            return List.of(new Endpoint(anchorId, EdgeType.NORMAL, null));
+        }
+
+        private List<Endpoint> handleMethodCallUnfoldWithNested(PsiMethodCallExpression root,
+                                                                List<Endpoint> incoming,
+                                                                TextRange range,
+                                                                String baseId,
+                                                                boolean replaceAnchorLabelWhenNoEllipsis,
+                                                                boolean expandFluent) {
+            ChainBuild chain = buildChainWithNested(root, incoming, range, baseId, replaceAnchorLabelWhenNoEllipsis, expandFluent);
+            Map<PsiMethodCallExpression, String> nodeMap = new java.util.LinkedHashMap<>(chain.nodeIds());
+            java.util.Set<PsiMethodCallExpression> visiting = new java.util.HashSet<>();
+            for (Map.Entry<PsiMethodCallExpression, String> entry : chain.nodeIds().entrySet()) {
+                unfoldNestedArguments(entry.getKey(), entry.getValue(), expandFluent, nodeMap, visiting);
+            }
+            return List.of(new Endpoint(chain.anchorId(), EdgeType.NORMAL, null));
+        }
+
+        private ChainBuild buildChainWithNested(PsiMethodCallExpression root,
+                                                List<Endpoint> incoming,
+                                                TextRange range,
+                                                String baseId,
+                                                boolean replaceAnchorLabelWhenNoEllipsis,
+                                                boolean expandFluent) {
+            List<PsiMethodCallExpression> chain = collectFluentChain(root);
+            Map<PsiMethodCallExpression, String> nodeIds = new java.util.LinkedHashMap<>();
+
+            if (!expandFluent) {
+                String label = collapsedChainLabel(chain);
+                String anchorId = baseId;
+                Map<String, Object> extras = new HashMap<>();
+                String finalLabel = label;
+                if (anchorId != null) {
+                    Node existing = findNode(anchorId);
+                    if (existing != null) {
+                        finalLabel = mergeAnchorLabel(existing.label(), label, true);
+                    }
+                }
+                if (anchorId == null) {
+                    anchorId = addNode(NodeType.ACTION, finalLabel, range, extras);
+                    link(incoming, anchorId);
+                } else {
+                    updateNode(anchorId, finalLabel, extras);
+                }
+                for (PsiMethodCallExpression call : chain) {
+                    nodeIds.put(call, anchorId);
+                }
+                return new ChainBuild(anchorId, nodeIds);
+            }
+
+            String chainTag = "chain-" + System.identityHashCode(root);
+            boolean markChainSplit = chain.size() > 1;
+            String anchorId = baseId;
+            String previous = null;
+            for (int i = 0; i < chain.size(); i++) {
+                PsiMethodCallExpression call = chain.get(i);
+                CallInfo info = buildCallInfo(call);
+                if (info == null) {
+                    continue;
+                }
+                boolean hasNested = hasNestedMethodCall(call);
+                Map<String, Object> meta = info.meta() != null ? new HashMap<>(info.meta()) : new HashMap<>();
+                if (markChainSplit) {
+                    meta.put("chainSplit", true);
+                    meta.put("fluentChainId", chainTag);
+                }
+                String label = callLabelForChain(call, hasNested, i > 0);
+                if (i == 0 && anchorId != null) {
+                    CallInfo merged = new CallInfo(info.type(), label, meta);
+                    mergeFirstCallIntoAnchor(anchorId, merged, replaceAnchorLabelWhenNoEllipsis || hasNested);
+                    nodeIds.put(call, anchorId);
+                    previous = anchorId;
+                    continue;
+                }
+                String id = addNode(info.type(), label, call.getTextRange(), meta);
+                if (anchorId == null) {
+                    anchorId = id;
+                    link(incoming, anchorId);
+                } else if (previous != null) {
+                    edges.add(new Edge(previous, id, EdgeType.NORMAL, "fluent"));
+                }
+                nodeIds.put(call, id);
+                previous = id;
+            }
+            if (anchorId == null) {
+                String fallbackLabel = callLabelForChain(root, hasNestedMethodCall(root), false);
+                anchorId = addNode(NodeType.ACTION, fallbackLabel, range, Map.of());
+                link(incoming, anchorId);
+                nodeIds.put(root, anchorId);
+            }
+            return new ChainBuild(anchorId, nodeIds);
+        }
+
+        private void unfoldNestedArguments(PsiMethodCallExpression parent,
+                                           String parentId,
+                                           boolean expandFluent,
+                                           Map<PsiMethodCallExpression, String> created,
+                                           java.util.Set<PsiMethodCallExpression> visiting) {
+            if (parent == null || parentId == null) {
+                return;
+            }
+            if (!visiting.add(parent)) {
+                return;
+            }
+            for (PsiExpression arg : parent.getArgumentList().getExpressions()) {
+                for (PsiMethodCallExpression nested : collectTopLevelMethodCalls(arg)) {
+                    String nestedId = created.get(nested);
+                    if (nestedId == null) {
+                        ChainBuild nestedChain = buildChainWithNested(nested, List.of(), nested.getTextRange(), null, false, expandFluent);
+                        nestedId = nestedChain.anchorId();
+                        nestedChain.nodeIds().forEach(created::putIfAbsent);
+                    }
+                    edges.add(new Edge(nestedId, parentId, EdgeType.NORMAL, "nested"));
+                    unfoldNestedArguments(nested, nestedId, expandFluent, created, visiting);
+                }
+            }
+        }
+
+        private List<PsiMethodCallExpression> collectFluentChain(PsiMethodCallExpression root) {
+            List<PsiMethodCallExpression> chain = new ArrayList<>();
+            PsiMethodCallExpression current = root;
+            while (current != null) {
+                chain.add(0, current);
+                PsiExpression q = current.getMethodExpression().getQualifierExpression();
+                if (q instanceof PsiMethodCallExpression qm) {
+                    current = qm;
+                } else {
+                    current = null;
+                }
+            }
+            return chain;
+        }
+
+        private List<PsiMethodCallExpression> collectTopLevelMethodCalls(PsiExpression expr) {
+            List<PsiMethodCallExpression> calls = new ArrayList<>();
+            if (expr == null) {
+                return calls;
+            }
+            expr.accept(new JavaRecursiveElementWalkingVisitor() {
+                int depth = 0;
+
+                @Override
+                public void visitMethodCallExpression(PsiMethodCallExpression expression) {
+                    if (depth == 0) {
+                        calls.add(expression);
+                    }
+                    depth++;
+                    super.visitMethodCallExpression(expression);
+                    depth--;
+                }
+            });
+            return calls;
+        }
+
+        private boolean hasNestedMethodCall(PsiMethodCallExpression call) {
+            if (call == null) {
+                return false;
+            }
+            final boolean[] found = {false};
+            for (PsiExpression arg : call.getArgumentList().getExpressions()) {
+                arg.accept(new JavaRecursiveElementWalkingVisitor() {
+                    @Override
+                    public void visitMethodCallExpression(PsiMethodCallExpression expression) {
+                        found[0] = true;
+                    }
+                });
+                if (found[0]) {
+                    break;
+                }
+            }
+            return found[0];
+        }
+
+        private String callLabelForChain(PsiMethodCallExpression call, boolean maskArgs, boolean prefixEllipsis) {
+            String name = call.getMethodExpression().getReferenceName();
+            if (name == null || name.isBlank()) {
+                name = safeLabel(call.getMethodExpression().getText());
+            }
+            String args = call.getArgumentList().getText();
+            if (maskArgs) {
+                args = "(...)";
+            } else if (args == null || args.isBlank()) {
+                args = "()";
+            }
+            String label = name + args;
+            if (prefixEllipsis && !label.startsWith("...")) {
+                label = "..." + label;
+            }
+            return label;
+        }
+
+        private String collapsedChainLabel(List<PsiMethodCallExpression> chain) {
+            return chain.stream()
+                    .map(call -> callLabelForChain(call, hasNestedMethodCall(call), false))
+                    .collect(Collectors.joining("."));
+        }
+
+        private void updateNode(String nodeId, String newLabel, Map<String, Object> extraMeta) {
+            if (nodeId == null) {
+                return;
+            }
+            for (int i = 0; i < nodes.size(); i++) {
+                Node n = nodes.get(i);
+                if (!nodeId.equals(n.id())) {
+                    continue;
+                }
+                Map<String, Object> meta = new HashMap<>(n.meta());
+                if (extraMeta != null) {
+                    meta.putAll(extraMeta);
+                }
+                nodes.set(i, new Node(n.id(), n.type(), newLabel != null ? newLabel : n.label(), meta));
+                return;
+            }
+        }
+
+        private Node findNode(String id) {
+            if (id == null) {
+                return null;
+            }
+            for (Node n : nodes) {
+                if (id.equals(n.id())) {
+                    return n;
+                }
+            }
+            return null;
+        }
+
+        private void mergeFirstCallIntoAnchor(String anchorId, CallInfo firstCall, boolean replaceAnchorLabelWhenNoEllipsis) {
+            Node anchorNode = null;
+            int anchorIndex = -1;
+            for (int i = 0; i < nodes.size(); i++) {
+                if (anchorId.equals(nodes.get(i).id())) {
+                    anchorNode = nodes.get(i);
+                    anchorIndex = i;
+                    break;
+                }
+            }
+            if (anchorNode == null) {
+                return;
+            }
+            Map<String, Object> mergedMeta = new HashMap<>(anchorNode.meta());
+            Map<String, Object> callMeta = firstCall.meta() != null ? new HashMap<>(firstCall.meta()) : Map.of();
+            // keep existing inlineCalls, append the first call so call-chain仍可渲染
+            List<Map<String, Object>> inline = copyInline(mergedMeta.get("inlineCalls"));
+            if (!callMeta.isEmpty()) {
+                inline.add(callMeta);
+            }
+            if (!inline.isEmpty()) {
+                mergedMeta.put("inlineCalls", inline);
+            }
+            if (Boolean.TRUE.equals(callMeta.get("chainSplit")) || Boolean.TRUE.equals(mergedMeta.get("chainSplit"))) {
+                mergedMeta.put("chainSplit", true);
+            }
+            String mergedLabel = mergeAnchorLabel(anchorNode.label(), firstCall.label(), replaceAnchorLabelWhenNoEllipsis);
+            Node mergedNode = new Node(anchorNode.id(), anchorNode.type(), mergedLabel, mergedMeta);
+            nodes.set(anchorIndex, mergedNode);
+        }
+
+        private String mergeAnchorLabel(String anchorLabel, String callLabel, boolean replaceWhenNoEllipsis) {
+            if (anchorLabel == null || anchorLabel.isBlank()) {
+                return callLabel;
+            }
+            if (callLabel == null || callLabel.isBlank()) {
+                return anchorLabel;
+            }
+            if (anchorLabel.contains("...")) {
+                return anchorLabel.replaceFirst("\\.\\.\\.", callLabel);
+            }
+            if (replaceWhenNoEllipsis) {
+                return callLabel;
+            }
+            return anchorLabel + "</br>" + callLabel;
         }
 
         private CallInfo buildCallInfo(PsiMethodCallExpression callExpression) {
@@ -1017,9 +1496,9 @@ public class JavaFlowExtractor implements FlowExtractor {
             if (target == null) {
                 return new CallInfo(NodeType.CALL, safeLabel(callExpression.getText()), Map.of());
             }
-            boolean matchedSkipRegex = !options.skipRegexes().isEmpty() && shouldSkipByRegex(target, options.skipRegexes());
+            boolean matchedSkipRegex = !skipRegexes.isEmpty() && shouldSkipByRegex(target, skipRegexes);
             boolean isJdk = isJdkMethod(target);
-            int jdkDepth = options.jdkApiDepth();
+            int jdkDepth = jdkApiDepth;
             if (isJdk && jdkDepth < 0) {
                 return null; // skip entirely
             }
@@ -1072,29 +1551,19 @@ public class JavaFlowExtractor implements FlowExtractor {
             } else if (isJdk && jdkDepth == 0) {
                 meta.put("skipCallRender", true);
             }
-            if (options.callDepth() == 0) {
+            if (callDepth == 0) {
                 meta.put("skipCallRender", true);
             }
-            int callDepth = options.callDepth();
             boolean allowExpand = callDepth != 0 && (!isJdk || jdkDepth > 0) && !matchedSkipRegex;
             int nextDepth = isJdk ? jdkDepth - 1 : jdkDepth;
             if (allowExpand && !visited.contains(target) && target.getBody() != null) {
                 java.util.Set<PsiMethod> nestedVisited = new java.util.HashSet<>(visited);
                 nestedVisited.add(target);
                 int nextCallDepth = callDepth > 0 ? callDepth - 1 : callDepth;
-                ExtractOptions nestedOptions = new ExtractOptions(
-                        options.foldSequentialCalls(),
-                        options.foldSequentialSetters(),
-                        options.foldSequentialGetters(),
-                        options.foldSequentialCtors(),
-                        nextDepth,
-                        options.mergeCalls(),
-                        options.ternaryExpandLevel(),
-                        nextCallDepth,
-                        options.useJavadocLabels(),
-                        options.skipRegexes()
-                );
-                Builder nested = new Builder(nestedOptions, target, nestedVisited);
+                Java2FlowchartSettings.State nestedState = copyState(state);
+                nestedState.setJdkApiDepth(nextDepth);
+                nestedState.setCallDepth(nextCallDepth);
+                Builder nested = new Builder(nestedState, target, nestedVisited);
                 ControlFlowGraph calleeGraph = nested.build(target, target.getBody());
                 meta.put("calleeGraph", calleeGraph);
             }
@@ -1107,9 +1576,9 @@ public class JavaFlowExtractor implements FlowExtractor {
             }
         }
 
-        private void link(List<Endpoint> incoming, String to, EdgeType edgeType, String label) {
+        private void link(List<Endpoint> incoming, String to) {
             for (Endpoint endpoint : incoming) {
-                edges.add(new Edge(endpoint.from(), to, edgeType != null ? edgeType : endpoint.type(), label != null ? label : endpoint.label()));
+                edges.add(new Edge(endpoint.from(), to, EdgeType.NORMAL, endpoint.label()));
             }
         }
 
@@ -1342,6 +1811,9 @@ public class JavaFlowExtractor implements FlowExtractor {
         }
 
         private boolean allowMerge(Node a, Node b) {
+            if (Boolean.TRUE.equals(a.meta().get("chainSplit")) || Boolean.TRUE.equals(b.meta().get("chainSplit"))) {
+                return false; // keep chain-split nodes separate
+            }
             String qa = qualifierOf(a.label());
             String qb = qualifierOf(b.label());
             boolean sameQualifier = qa != null && qa.equals(qb);
@@ -1356,10 +1828,10 @@ public class JavaFlowExtractor implements FlowExtractor {
                 return false;
             }
 
-            boolean seqAllowed = options.foldSequentialCalls();
-            boolean setter = seqAllowed && options.foldSequentialSetters() && kindA == CallKind.SET;
-            boolean getter = options.foldSequentialGetters() && kindA == CallKind.GET;
-            boolean ctor = options.foldSequentialCtors() && kindA == CallKind.CTOR;
+            boolean seqAllowed = foldSequentialCalls;
+            boolean setter = seqAllowed && effectiveFoldSequentialSetters() && kindA == CallKind.SET;
+            boolean getter = effectiveFoldSequentialGetters() && kindA == CallKind.GET;
+            boolean ctor = seqAllowed && effectiveFoldSequentialCtors() && kindA == CallKind.CTOR;
 
             if (setter || getter || ctor) {
                 return true;
@@ -1387,7 +1859,6 @@ public class JavaFlowExtractor implements FlowExtractor {
             return copy;
         }
 
-        @SuppressWarnings("unchecked")
         private void mergeCallMeta(Map<String, Object> mergedMeta, Map<String, Object> callA, Map<String, Object> callB) {
             // Use a linked map to preserve order and avoid duplicates by key.
             Map<String, Map<String, Object>> inlineMap = new java.util.LinkedHashMap<>();
@@ -1413,7 +1884,6 @@ public class JavaFlowExtractor implements FlowExtractor {
             if (callB != null && (callB.containsKey("callee") || callB.containsKey("calleeGraph"))) {
                 if (!hasPrimary) {
                     mergedMeta.putAll(callB);
-                    hasPrimary = true;
                 } else {
                     addInline.accept(copyWithoutInline(callB));
                 }
@@ -1482,18 +1952,7 @@ public class JavaFlowExtractor implements FlowExtractor {
             return normalized.matches(".*=\\s*new\\s+.+\\(.*\\)") || normalized.matches("\\bnew\\s+.+\\(.*\\)");
         }
 
-        private boolean sameLhs(String a, String b) {
-            String la = lhsVar(a);
-            String lb = lhsVar(b);
-            return la != null && la.equals(lb);
-        }
 
-        private String lhsVar(String label) {
-            if (label == null) return null;
-            int eq = label.indexOf('=');
-            if (eq <= 0) return null;
-            return label.substring(0, eq).trim();
-        }
 
         private String qualifierOf(String label) {
             if (label == null) return null;
@@ -1504,9 +1963,6 @@ public class JavaFlowExtractor implements FlowExtractor {
             return null;
         }
 
-        private boolean isCall(String label) {
-            return label != null && label.contains("(") && label.contains(")");
-        }
 
         private String normalizeLabel(String label) {
             return label
@@ -1553,6 +2009,18 @@ public class JavaFlowExtractor implements FlowExtractor {
                 return CallKind.GET;
             }
             return CallKind.OTHER;
+        }
+
+        private boolean effectiveFoldSequentialSetters() {
+            return foldSequentialCalls && foldSequentialSetters;
+        }
+
+        private boolean effectiveFoldSequentialGetters() {
+            return foldSequentialCalls && foldSequentialGetters;
+        }
+
+        private boolean effectiveFoldSequentialCtors() {
+            return foldSequentialCalls && foldSequentialCtors;
         }
 
         private boolean separatedByBlankLine(Node a, Node b) {
@@ -1604,15 +2072,50 @@ public class JavaFlowExtractor implements FlowExtractor {
             mergedMeta.put("lineNumber", start);
         }
 
-        private String stripQualifier(String label) {
-            if (label == null) {
-                return "";
+        private CallGraph collectCallGraphForFluent(PsiMethodCallExpression root, boolean includeFluent) {
+            java.util.Set<PsiMethodCallExpression> order = new java.util.LinkedHashSet<>();
+            java.util.List<CallRelation> relations = new java.util.ArrayList<>();
+            java.util.Set<String> relationKeys = new java.util.HashSet<>();
+            collectCallGraphForFluent(root, null, null, order, relations, relationKeys, includeFluent);
+            return new CallGraph(new java.util.ArrayList<>(order), relations);
+        }
+
+        private void collectCallGraphForFluent(PsiMethodCallExpression expr,
+                                               PsiMethodCallExpression parent,
+                                               CallRelationType relationType,
+                                               java.util.Set<PsiMethodCallExpression> order,
+                                               java.util.List<CallRelation> relations,
+                                               java.util.Set<String> relationKeys,
+                                               boolean includeFluent) {
+            boolean added = order.add(expr);
+            if (parent != null && relationType != null) {
+                String key = System.identityHashCode(expr) + "|" + System.identityHashCode(parent) + "|" + relationType;
+                if (relationKeys.add(key)) {
+                    relations.add(new CallRelation(expr, parent, relationType));
+                }
             }
-            int paren = label.indexOf('(');
-            String head = paren >= 0 ? label.substring(0, paren) : label;
-            int lastDot = head.lastIndexOf('.');
-            String base = lastDot >= 0 ? head.substring(lastDot + 1) : head;
-            return paren >= 0 ? base + label.substring(paren) : base;
+            if (!added) {
+                return;
+            }
+            if (includeFluent) {
+                collectCallExpressionsForFluent(expr.getMethodExpression().getQualifierExpression(), expr, order, relations, relationKeys);
+            }
+        }
+
+        private void collectCallExpressionsForFluent(PsiExpression expr,
+                                                     PsiMethodCallExpression parent,
+                                                     Set<PsiMethodCallExpression> order,
+                                                     List<CallRelation> relations,
+                                                     Set<String> relationKeys) {
+            if (expr == null) {
+                return;
+            }
+            expr.accept(new JavaRecursiveElementWalkingVisitor() {
+                @Override
+                public void visitMethodCallExpression(PsiMethodCallExpression expression) {
+                    collectCallGraphForFluent(expression, parent, CallRelationType.FLUENT, order, relations, relationKeys, true);
+                }
+            });
         }
 
         private List<PsiMethodCallExpression> collectNestedCalls(PsiMethodCallExpression root) {
@@ -1644,7 +2147,7 @@ public class JavaFlowExtractor implements FlowExtractor {
         }
 
         private boolean isGetterPair(Node a, Node b) {
-            return options.foldSequentialGetters() &&
+            return foldSequentialGetters &&
                     (isGetter(a.label()) || isGetterNode(a)) &&
                     (isGetter(b.label()) || isGetterNode(b));
         }
@@ -1684,11 +2187,30 @@ public class JavaFlowExtractor implements FlowExtractor {
             });
             return found[0];
         }
+
+        private String shortCallLabel(PsiMethodCallExpression call) {
+            String name = call.getMethodExpression().getReferenceName();
+            if (name == null || name.isBlank()) {
+                name = safeLabel(call.getMethodExpression().getText());
+            }
+            String args = call.getArgumentList().getText();
+            return name + args;
+        }
     }
 
     private record Endpoint(String from, EdgeType type, String label) {
     }
 
     private record LoopContext(String continueTarget, String breakTarget) {
+    }
+
+    private record CallRelation(PsiMethodCallExpression child, PsiMethodCallExpression parent,
+                                Builder.CallRelationType type) {
+    }
+
+    private record CallGraph(java.util.List<PsiMethodCallExpression> order, java.util.List<CallRelation> relations) {
+    }
+
+    private record ChainBuild(String anchorId, Map<PsiMethodCallExpression, String> nodeIds) {
     }
 }

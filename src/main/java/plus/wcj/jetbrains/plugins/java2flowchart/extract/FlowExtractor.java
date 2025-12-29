@@ -18,7 +18,8 @@ package plus.wcj.jetbrains.plugins.java2flowchart.extract;
 
 import com.intellij.psi.PsiMethod;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.ControlFlowGraph;
+import plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings;
 
 public interface FlowExtractor {
-    ControlFlowGraph extract(PsiMethod method, ExtractOptions options);
+    ControlFlowGraph extract(PsiMethod method, Java2FlowchartSettings.State state);
 }

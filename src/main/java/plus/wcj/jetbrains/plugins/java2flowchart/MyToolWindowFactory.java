@@ -32,13 +32,13 @@ import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
 import org.jetbrains.annotations.NotNull;
-import plus.wcj.jetbrains.plugins.java2flowchart.extract.ExtractOptions;
 import plus.wcj.jetbrains.plugins.java2flowchart.extract.FlowExtractor;
 import plus.wcj.jetbrains.plugins.java2flowchart.extract.JavaFlowExtractor;
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.ControlFlowGraph;
 import plus.wcj.jetbrains.plugins.java2flowchart.render.DiagramRenderer;
 import plus.wcj.jetbrains.plugins.java2flowchart.render.MermaidFlowchartRenderer;
 import plus.wcj.jetbrains.plugins.java2flowchart.render.RenderOptions;
+import plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings;
 
 import javax.swing.JButton;
 import javax.swing.JPanel;
@@ -86,7 +86,7 @@ public class MyToolWindowFactory implements ToolWindowFactory {
             if (method == null) {
                 return "Place the caret inside a Java method.";
             }
-            ControlFlowGraph graph = extractor.extract(method, ExtractOptions.defaultOptions());
+            ControlFlowGraph graph = extractor.extract(method, Java2FlowchartSettings.getInstance().getState());
             return renderer.render(graph, RenderOptions.topDown());
         });
     }
