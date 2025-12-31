@@ -18,6 +18,7 @@ package plus.wcj.jetbrains.plugins.java2flowchart.render;
 
 import plus.wcj.jetbrains.plugins.java2flowchart.ir.ControlFlowGraph;
 
+@SuppressWarnings({"unused", "SameReturnValue"})
 public interface DiagramRenderer {
     String id();
 

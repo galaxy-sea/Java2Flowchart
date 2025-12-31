@@ -40,11 +40,8 @@ import plus.wcj.jetbrains.plugins.java2flowchart.render.MermaidFlowchartRenderer
 import plus.wcj.jetbrains.plugins.java2flowchart.render.RenderOptions;
 import plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings;
 
-import javax.swing.JButton;
-import javax.swing.JPanel;
-import javax.swing.JTextArea;
-import java.awt.BorderLayout;
-import java.awt.Font;
+import javax.swing.*;
+import java.awt.*;
 
 public class MyToolWindowFactory implements ToolWindowFactory {
     private final FlowExtractor extractor = new JavaFlowExtractor();

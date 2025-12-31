@@ -16,16 +16,11 @@
 
 package plus.wcj.jetbrains.plugins.java2flowchart.render;
 
-import plus.wcj.jetbrains.plugins.java2flowchart.ir.ControlFlowGraph;
-import plus.wcj.jetbrains.plugins.java2flowchart.ir.Edge;
-import plus.wcj.jetbrains.plugins.java2flowchart.ir.EdgeType;
-import plus.wcj.jetbrains.plugins.java2flowchart.ir.Node;
-import plus.wcj.jetbrains.plugins.java2flowchart.ir.NodeType;
+import plus.wcj.jetbrains.plugins.java2flowchart.ir.*;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.Objects;
+import java.util.Set;
 
 public class MermaidFlowchartRenderer implements DiagramRenderer {
     @Override
@@ -41,16 +36,10 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
     @Override
     public String render(ControlFlowGraph graph, RenderOptions options) {
         RenderOptions renderOptions = options == null ? RenderOptions.topDown() : options;
-        GraphView view = simplify(graph);
+        GraphView view = remapStartEnd(simplify(graph));
         StringBuilder builder = new StringBuilder();
         builder.append("%%{init: {\"flowchart\": {\"defaultRenderer\": \"elk\",\"wrappingWidth\": 9999}} }%%").append("\n");
         builder.append("flowchart ").append(renderOptions.direction()).append("\n");
-        java.util.Set<String> connected = new java.util.HashSet<>();
-        for (Edge e : view.edges) {
-            connected.add(e.from());
-            connected.add(e.to());
-        }
-        connected.add(view.entryId);
         for (Node node : view.nodes) {
             builder.append("  ").append(node.id()).append(nodeShape(node)).append("\n");
         }
@@ -63,8 +52,44 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         for (String line : recursiveHints(view)) {
             builder.append("  ").append(line).append("\n");
         }
-        builder.append("\n\n");
+        builder.append("\n");
+        builder.append("  classDef startEnd fill:#f9f;\n");
+        builder.append("  class n_start,n_end startEnd;\n");
         return builder.toString();
+    }
+
+    private GraphView remapStartEnd(GraphView view) {
+        String startId = view.entryId;
+        String endId = null;
+        for (Node n : view.nodes) {
+            if (n.type() == NodeType.END) {
+                endId = n.id();
+                break;
+            }
+        }
+        if (startId == null && endId == null) {
+            return view;
+        }
+        String newStart = startId != null ? "n_start" : null;
+        String newEnd = endId != null ? "n_end" : null;
+        java.util.Map<String, String> remap = new java.util.HashMap<>();
+        if (startId != null) remap.put(startId, newStart);
+        if (endId != null) remap.put(endId, newEnd);
+
+        java.util.List<Node> remappedNodes = new java.util.ArrayList<>();
+        for (Node n : view.nodes) {
+            String newId = remap.getOrDefault(n.id(), n.id());
+            remappedNodes.add(new Node(newId, n.type(), n.label(), n.meta()));
+        }
+
+        java.util.List<Edge> remappedEdges = new java.util.ArrayList<>();
+        for (Edge e : view.edges) {
+            String from = remap.getOrDefault(e.from(), e.from());
+            String to = remap.getOrDefault(e.to(), e.to());
+            remappedEdges.add(new Edge(from, to, e.type(), e.label()));
+        }
+        String newEntry = remap.getOrDefault(view.entryId, view.entryId);
+        return new GraphView(remappedNodes, remappedEdges, newEntry);
     }
 
     private void renderEdgesCompact(GraphView view, StringBuilder builder) {
@@ -150,8 +175,7 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
     private String nodeShape(Node node) {
         String label = escape(node.label());
         return switch (node.type()) {
-            case START -> "([\"%s\"])".formatted(label);
-            case END -> "([\"%s\"])".formatted(label);
+            case START, END -> "([\"%s\"])".formatted(label);
             case DECISION, LOOP_HEAD -> "{\"%s\"}".formatted(label);
             default -> "[\"%s\"]".formatted(label);
         };
@@ -181,7 +205,8 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
             label = switch (edge.type()) {
                 case TRUE -> "true";
                 case FALSE -> "false";
-                case EXCEPTION -> "";
+                case EXCEPTION -> //noinspection DuplicateBranchesInSwitch
+                        "";
                 case BREAK -> "break";
                 case CONTINUE -> "continue";
                 default -> "";
@@ -201,7 +226,6 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
             return new GraphView(nodes, edges, graph.entryId());
         }
 
-        var nodeById = nodes.stream().collect(java.util.stream.Collectors.toMap(Node::id, n -> n));
         var incoming = new java.util.HashMap<String, java.util.List<Edge>>();
         var outgoing = new java.util.HashMap<String, java.util.List<Edge>>();
         for (Edge e : edges) {
@@ -247,37 +271,25 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
 
     private java.util.List<String> callChainExtras(GraphView view) {
         java.util.List<String> lines = new java.util.ArrayList<>();
-        boolean mergeCallees = false;
-        try {
-            mergeCallees = plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.getInstance().getState().getMergeCalls();
-        } catch (Throwable ignored) {
-        }
-        java.util.Map<String, String> mergedTargets = mergeCallees ? new java.util.HashMap<>() : null;
-        java.util.Set<String> renderedGraphs = mergeCallees ? new java.util.HashSet<>() : null;
+        java.util.Map<String, String> mergedTargets = new java.util.HashMap<>();
+        java.util.Set<String> renderedGraphs = new java.util.HashSet<>();
         java.util.Set<String> callEdgesSeen = new java.util.HashSet<>();
         java.util.Map<String, Integer> callCounters = new java.util.HashMap<>();
         java.util.List<Node> ordered = new java.util.ArrayList<>(view.nodes);
-        ordered.sort((a, b) -> {
-            int la = lineNumberOf(a.meta());
-            int lb = lineNumberOf(b.meta());
-            if (la != lb) return Integer.compare(la, lb);
-            return a.id().compareTo(b.id());
-        });
+        sort(ordered);
         for (Node node : ordered) {
             if (node.type() == NodeType.CALL && !node.label().toLowerCase().contains("recursive call")) {
-                renderCall(node.id(), node.meta(), lines, mergeCallees, mergedTargets, renderedGraphs, "", callCounters, null, callEdgesSeen);
+                renderCall(node.id(), node.meta().copy(), lines, mergedTargets, renderedGraphs, "", callCounters, callEdgesSeen);
             } else {
-                Object rawInline = node.meta().get("inlineCalls");
-                if (rawInline instanceof java.util.List<?> list) {
+                java.util.List<NodeMeta> inlineCalls = node.meta().getInlineCalls();
+                if (inlineCalls != null && !inlineCalls.isEmpty()) {
                     boolean first = true;
-                    for (Object o : list) {
-                        if (o instanceof java.util.Map<?, ?> m) {
-                            if (!lines.isEmpty() && first) {
-                                lines.add("");
-                            }
-                            renderCall(node.id(), (java.util.Map<String, Object>) m, lines, mergeCallees, mergedTargets, renderedGraphs, "", callCounters, null, callEdgesSeen);
-                            first = false;
+                    for (NodeMeta meta : inlineCalls) {
+                        if (!lines.isEmpty() && first) {
+                            lines.add("");
                         }
+                        renderCall(node.id(), meta.copy(), lines, mergedTargets, renderedGraphs, "", callCounters, callEdgesSeen);
+                        first = false;
                     }
                 }
             }
@@ -285,9 +297,9 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         return lines;
     }
 
-    private RenderedGraph renderSubGraph(ControlFlowGraph graph, String prefix, java.util.List<String> lines, AtomicInteger idx,
+    private RenderedGraph renderSubGraph(ControlFlowGraph graph, String prefix, java.util.List<String> lines,
                                          java.util.Set<String> renderedGraphs, String callPrefix,
-                                         java.util.Map<String, Integer> callCounters, boolean mergeCallees,
+                                         java.util.Map<String, Integer> callCounters,
                                          java.util.Map<String, String> mergedTargets) {
         if (renderedGraphs != null && !renderedGraphs.add(prefix + graph.entryId())) {
             return new RenderedGraph(prefix + graph.entryId(), null);
@@ -300,12 +312,7 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         }
         lines.add("");
         java.util.List<Node> orderedNodes = new java.util.ArrayList<>(graph.nodes());
-        orderedNodes.sort((a, b) -> {
-            int la = lineNumberOf(a.meta());
-            int lb = lineNumberOf(b.meta());
-            if (la != lb) return Integer.compare(la, lb);
-            return a.id().compareTo(b.id());
-        });
+        sort(orderedNodes);
         for (Node node : orderedNodes) {
             if (node.type() == NodeType.CALL && !edgeTouched.contains(node.id())) {
                 continue; // likely inline-only; skip node rendering
@@ -337,63 +344,67 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
             if (node.type() != NodeType.CALL) {
                 continue;
             }
-            renderCall(prefix + node.id(), node.meta(), lines, mergeCallees, mergedTargets,
-                    renderedGraphs, callPrefix, callCounters, null, callEdgesSeen);
+            renderCall(prefix + node.id(), node.meta().copy(), lines, mergedTargets,
+                    renderedGraphs, callPrefix, callCounters, callEdgesSeen);
         }
         return new RenderedGraph(entryTarget, exitTarget);
     }
 
-    private String renderCall(String sourceId, Map<String, Object> meta,
-                            java.util.List<String> lines, boolean mergeCallees,
-                            java.util.Map<String, String> mergedTargets, java.util.Set<String> renderedGraphs,
-                            String callPrefix, java.util.Map<String, Integer> callCounters,
-                            String forcedLabel, java.util.Set<String> callEdgesSeen) {
-        Object calleeObj = meta.get("callee");
-        Object calleeKeyObj = meta.get("calleeKey");
-        Object calleeBodyObj = meta.get("calleeBody");
-        Object calleeGraphObj = meta.get("calleeGraph");
-        boolean inline = Boolean.TRUE.equals(meta.get("inline"));
-        if (!(calleeObj instanceof String callee) || callee.isBlank()) {
-            return "";
+    private void sort(List<Node> orderedNodes) {
+        orderedNodes.sort((a, b) -> {
+            int la = lineNumberOf(a.meta());
+            int lb = lineNumberOf(b.meta());
+            if (la != lb) return Integer.compare(la, lb);
+            return a.id().compareTo(b.id());
+        });
+    }
+
+    private void renderCall(String sourceId, NodeMeta meta,
+                            List<String> lines,
+                            Map<String, String> mergedTargets, Set<String> renderedGraphs,
+                            String callPrefix, Map<String, Integer> callCounters,
+                            Set<String> callEdgesSeen) {
+        String callee = meta.getCallee();
+        String calleeKey = meta.getCalleeKey() != null ? meta.getCalleeKey() : callee;
+        String calleeBody = meta.getCalleeBody();
+        ControlFlowGraph calleeGraphObj = meta.getCalleeGraph();
+        boolean inline = Boolean.TRUE.equals(meta.getInline());
+        if (callee == null || callee.isBlank()) {
+            return;
         }
         // Render inline calls first using the same prefix so numbering follows evaluation order.
-        Object rawInline = meta.get("inlineCalls");
-        if (rawInline instanceof List<?> list) {
-            for (Object o : list) {
-                if (o instanceof Map<?, ?> m) {
-                    renderCall(sourceId, (Map<String, Object>) m, lines, mergeCallees, mergedTargets, renderedGraphs, callPrefix, callCounters, null, callEdgesSeen);
-                }
+        java.util.List<NodeMeta> inlineCalls = meta.getInlineCalls();
+        if (inlineCalls != null) {
+            for (NodeMeta inlineMeta : inlineCalls) {
+                renderCall(sourceId, inlineMeta.copy(), lines, mergedTargets, renderedGraphs, callPrefix, callCounters, callEdgesSeen);
             }
         }
         // Allocate index for this call
         int baseIdx = callCounters.merge(callPrefix, 1, Integer::sum);
         String baseLabel = callPrefix.isEmpty() ? String.valueOf(baseIdx) : callPrefix + baseIdx;
 
-        String calleeBody = calleeBodyObj instanceof String s ? s : null;
-        String calleeDisplay = meta.get("calleeDisplay") instanceof String s ? s : callee;
-        String calleeKey = calleeKeyObj instanceof String s ? s : callee;
-        Object lineObj = meta.get("lineNumber");
+        String calleeDisplay = meta.getCalleeDisplay() != null ? meta.getCalleeDisplay() : callee;
+        Integer lineObj = meta.getLineNumber();
         String baseId;
-        if (lineObj instanceof Number n) {
-            baseId = "cL" + n.intValue();
+        if (lineObj != null) {
+            baseId = "cL" + lineObj;
         } else {
             String sanitized = sanitizeId(calleeKey);
             baseId = "c" + Math.abs(sanitized.hashCode());
         }
         String targetId = null;
-        if (mergeCallees && mergedTargets.containsKey(calleeKey)) {
+        if (mergedTargets.containsKey(calleeKey)) {
             targetId = mergedTargets.get(calleeKey);
         }
-        boolean skipEdge = Boolean.TRUE.equals(meta.get("skipCallRender"));
-        String labelText = forcedLabel != null ? forcedLabel : baseLabel;
+        boolean skipEdge = Boolean.TRUE.equals(meta.getSkipCallRender());
 
         String childPrefix = baseLabel + ".";
         callCounters.remove(childPrefix); // reset child counter for this branch
 
-        if (calleeGraphObj instanceof ControlFlowGraph calleeGraph && targetId == null) {
+        if (calleeGraphObj != null && targetId == null) {
             if (inline) {
-                String entryNodeId = calleeGraph.entryId();
-                Node entryNode = calleeGraph.nodes().stream()
+                String entryNodeId = calleeGraphObj.entryId();
+                Node entryNode = calleeGraphObj.nodes().stream()
                         .filter(n -> n.id().equals(entryNodeId))
                         .findFirst()
                         .orElse(null);
@@ -403,37 +414,29 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
                 } else {
                     lines.add(targetId + "[\"start\"]");
                 }
-                if (mergeCallees) {
-                    mergedTargets.putIfAbsent(calleeKey, targetId);
-                }
+                mergedTargets.putIfAbsent(calleeKey, targetId);
             } else {
                 String prefix = baseId + "_";
-                RenderedGraph rendered = renderSubGraph(calleeGraph, prefix, lines, new AtomicInteger(0),
-                        mergeCallees ? renderedGraphs : null, labelText + ".", callCounters, mergeCallees, mergedTargets);
+                RenderedGraph rendered = renderSubGraph(calleeGraphObj, prefix, lines, renderedGraphs, baseLabel + ".", callCounters, mergedTargets);
                 targetId = rendered.entryId();
-                if (mergeCallees) {
-                    mergedTargets.putIfAbsent(calleeKey, targetId);
-                }
+                mergedTargets.putIfAbsent(calleeKey, targetId);
             }
         }
         if (!skipEdge && targetId == null) {
             targetId = baseId + "_stub";
-            String label = calleeDisplay != null && !calleeDisplay.isBlank()
+            String label = !calleeDisplay.isBlank()
                     ? calleeDisplay
-                    : (calleeBody != null && !calleeBody.isBlank() ? calleeBody : callee);
+                    : calleeBody != null && !calleeBody.isBlank() ? calleeBody : callee;
             lines.add(targetId + "[\"" + escape(label) + "\"]");
-            if (mergeCallees) {
-                mergedTargets.putIfAbsent(calleeKey, targetId);
-            }
+            mergedTargets.putIfAbsent(calleeKey, targetId);
         }
-        if (!skipEdge && targetId != null) {
+        if (!skipEdge) {
             String edgeKey = sourceId + "|" + targetId + "|" + calleeKey;
             if (callEdgesSeen == null || callEdgesSeen.add(edgeKey)) {
-                lines.add(sourceId + " -. \"calls:" + labelText + "\" .-> " + targetId);
+                lines.add(sourceId + " -. \"calls:" + baseLabel + "\" .-> " + targetId);
             }
         }
 
-        return labelText;
     }
 
     private record RenderedGraph(String entryId, String exitId) {
@@ -446,28 +449,12 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
         return raw.replaceAll("[^a-zA-Z0-9_]", "_");
     }
 
-    private int lineNumberOf(Map<String, Object> meta) {
-        Object lineObj = meta != null ? meta.get("lineNumber") : null;
-        if (lineObj instanceof Number n) {
-            return n.intValue();
+    private int lineNumberOf(NodeMeta meta) {
+        Integer lineObj = meta != null ? meta.getLineNumber() : null;
+        if (lineObj != null) {
+            return lineObj;
         }
         return Integer.MAX_VALUE;
-    }
-
-    private String inlineKey(Map<String, Object> meta) {
-        Object calleeKey = meta.get("calleeKey");
-        if (calleeKey instanceof String s && !s.isBlank()) {
-            return "calleeKey:" + s;
-        }
-        Object callee = meta.get("callee");
-        if (callee instanceof String s && !s.isBlank()) {
-            return "callee:" + s;
-        }
-        Object display = meta.get("calleeDisplay");
-        if (display instanceof String s && !s.isBlank()) {
-            return "display:" + s;
-        }
-        return "metaHash:" + meta.hashCode();
     }
 
     private record GraphView(java.util.List<Node> nodes, java.util.List<Edge> edges, String entryId) {
@@ -487,21 +474,11 @@ public class MermaidFlowchartRenderer implements DiagramRenderer {
     private boolean isChainEdge(Node from, Node to) {
         if (from == null || to == null) return false;
         // explicit chain id from splitter; only treat as chain if both nodes were produced by chain split
-        Object chainA = from.meta().get("fluentChainId");
-        Object chainB = to.meta().get("fluentChainId");
-        boolean splitA = Boolean.TRUE.equals(from.meta().get("chainSplit"));
-        boolean splitB = Boolean.TRUE.equals(to.meta().get("chainSplit"));
+        String chainA = from.meta().getFluentChainId();
+        String chainB = to.meta().getFluentChainId();
+        boolean splitA = from.meta().hasChainSplit();
+        boolean splitB = to.meta().hasChainSplit();
         return chainA != null && chainA.equals(chainB) && splitA && splitB;
     }
 
-    private String qualifierOf(String label) {
-        if (label == null) return null;
-        int paren = label.indexOf('(');
-        String prefix = paren > 0 ? label.substring(0, paren) : label;
-        int lastDot = prefix.lastIndexOf('.');
-        if (lastDot <= 0) {
-            return null;
-        }
-        return prefix.substring(0, lastDot);
-    }
 }

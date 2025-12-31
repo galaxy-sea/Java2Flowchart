@@ -26,10 +26,6 @@ import java.util.ResourceBundle
 private const val BUNDLE = "messages.MyMessageBundle"
 
 object Java2FlowchartBundle : DynamicBundle(BUNDLE) {
-    @JvmStatic
-    fun message(@PropertyKey(resourceBundle = BUNDLE) key: String, vararg params: Any): String {
-        return getMessage(key, *params)
-    }
 
     @JvmStatic
     fun message(@PropertyKey(resourceBundle = BUNDLE) key: String, language: Java2FlowchartSettings.Language, vararg params: Any): String {

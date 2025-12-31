@@ -50,12 +50,12 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
     private lateinit var jdkDepthLabel: JBLabel
     private lateinit var callDepthSpinner: JBIntSpinner
     private lateinit var callDepthLabel: JBLabel
-    private lateinit var mergeCallsCheckBox: JBCheckBox
     private lateinit var ternaryLevelSpinner: JBIntSpinner
     private lateinit var ternaryLabel: JBLabel
     private lateinit var labelMaxSpinner: JBIntSpinner
     private lateinit var labelMaxLabel: JBLabel
     private lateinit var useJavadocCheckBox: JBCheckBox
+    private lateinit var exportSourceCheckBox: JBCheckBox
     private lateinit var skipRegexTable: JBTable
     private lateinit var skipRegexModel: ListTableModel<Java2FlowchartSettings.SkipRegexEntry>
     private var panel: JPanel? = null
@@ -76,10 +76,10 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         val langModified = selectedLanguage() != settings.state.language
         val depthModified = (jdkDepthSpinner.value as Int) != settings.state.jdkApiDepth
         val callDepthModified = (callDepthSpinner.value as Int) != settings.state.callDepth
-        val mergeModified = mergeCallsCheckBox.isSelected != settings.state.mergeCalls
         val ternaryModified = (ternaryLevelSpinner.value as Int) != settings.state.ternaryExpandLevel
         val labelModified = (labelMaxSpinner.value as Int) != settings.state.labelMaxLength
         val javadocModified = useJavadocCheckBox.isSelected != settings.state.useJavadocLabels
+        val exportSourceModified = exportSourceCheckBox.isSelected != settings.state.exportSource
         val foldFluentModified = foldFluentCheckBox.isSelected != settings.state.foldFluentCalls
         val foldNestedModified = foldNestedCheckBox.isSelected != settings.state.foldNestedCalls
         val foldDetailModified =
@@ -88,7 +88,7 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
                     foldGetCheckBox.isSelected != settings.state.foldSequentialGetters ||
                     foldCtorCheckBox.isSelected != settings.state.foldSequentialCtors
         val skipRegexModified = currentSkipEntries() != settings.state.skipRegexEntries
-        return foldFluentModified || foldNestedModified || foldDetailModified || langModified || depthModified || callDepthModified || mergeModified || ternaryModified || labelModified || javadocModified || skipRegexModified
+        return foldFluentModified || foldNestedModified || foldDetailModified || langModified || depthModified || callDepthModified || ternaryModified || labelModified || javadocModified || exportSourceModified || skipRegexModified
     }
 
     override fun apply() {
@@ -101,10 +101,10 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         settings.state.language = selectedLanguage()
         settings.state.jdkApiDepth = jdkDepthSpinner.number
         settings.state.callDepth = callDepthSpinner.number
-        settings.state.mergeCalls = mergeCallsCheckBox.isSelected
         settings.state.ternaryExpandLevel = ternaryLevelSpinner.number
         settings.state.labelMaxLength = labelMaxSpinner.number
         settings.state.useJavadocLabels = useJavadocCheckBox.isSelected
+        settings.state.exportSource = exportSourceCheckBox.isSelected
         val skips = currentSkipEntries().filter { it.pattern.isNotBlank() }
         settings.state.skipRegexEntries = skips.toMutableList()
     }
@@ -128,7 +128,6 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         val callText = Java2FlowchartBundle.message("settings.call.depth", language)
         callDepthSpinner.toolTipText = callText
         callDepthLabel.text = callText
-        mergeCallsCheckBox.text = Java2FlowchartBundle.message("settings.merge.calls", language)
         val ternaryText = Java2FlowchartBundle.message("settings.expand.ternary.level", language)
         ternaryLevelSpinner.toolTipText = ternaryText
         ternaryLabel.text = ternaryText
@@ -136,6 +135,7 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         labelMaxSpinner.toolTipText = labelText
         labelMaxLabel.text = labelText
         useJavadocCheckBox.text = Java2FlowchartBundle.message("settings.use.javadoc", language)
+        exportSourceCheckBox.text = Java2FlowchartBundle.message("settings.export.source", language)
         foldFluentCheckBox.text = Java2FlowchartBundle.message("settings.fold.fluent", language)
         foldNestedCheckBox.text = Java2FlowchartBundle.message("settings.fold.nested", language)
         foldSequentialCheckBox.text = Java2FlowchartBundle.message("settings.fold.sequential", language)
@@ -153,7 +153,7 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
     }
 
     private fun initControls() {
-        languageCombo = ComboBox(Java2FlowchartSettings.Language.values()).apply {
+        languageCombo = ComboBox(Java2FlowchartSettings.Language.entries.toTypedArray()).apply {
             val h = preferredSize.height
             maximumSize = Dimension(200, h)
             preferredSize = Dimension(200, h)
@@ -171,10 +171,10 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         labelMaxLabel = JBLabel()
         jdkDepthSpinner = JBIntSpinner(settings.state.jdkApiDepth, -1, 5, 1)
         callDepthSpinner = JBIntSpinner(settings.state.callDepth, -1, 10, 1)
-        mergeCallsCheckBox = JBCheckBox()
         ternaryLevelSpinner = JBIntSpinner(settings.state.ternaryExpandLevel, -1, 10, 1)
         labelMaxSpinner = JBIntSpinner(settings.state.labelMaxLength, -1, 500, 5)
         useJavadocCheckBox = JBCheckBox()
+        exportSourceCheckBox = JBCheckBox()
         foldFluentCheckBox = JBCheckBox()
         foldNestedCheckBox = JBCheckBox()
         foldSequentialCheckBox = JBCheckBox()
@@ -193,10 +193,10 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
         applyLanguageTexts(settings.state.language)
         jdkDepthSpinner.value = settings.state.jdkApiDepth
         callDepthSpinner.value = settings.state.callDepth
-        mergeCallsCheckBox.isSelected = settings.state.mergeCalls
         ternaryLevelSpinner.value = settings.state.ternaryExpandLevel
         labelMaxSpinner.value = settings.state.labelMaxLength
         useJavadocCheckBox.isSelected = settings.state.useJavadocLabels
+        exportSourceCheckBox.isSelected = settings.state.exportSource
         foldFluentCheckBox.isSelected = settings.state.foldFluentCalls
         foldNestedCheckBox.isSelected = settings.state.foldNestedCalls
         foldSequentialCheckBox.isSelected = settings.state.foldSequentialCalls
@@ -214,8 +214,8 @@ class Java2FlowchartSettingsConfigurable : SearchableConfigurable {
             .addComponent(foldNestedCheckBox)
             .addComponent(foldSequentialCheckBox)
             .addComponent(sequentialChildrenPanel())
-            .addComponent(mergeCallsCheckBox)
             .addComponent(useJavadocCheckBox)
+            .addComponent(exportSourceCheckBox)
             .addLabeledComponent(jdkDepthLabel, jdkDepthSpinner, 1, false)
             .addLabeledComponent(callDepthLabel, callDepthSpinner, 1, false)
             .addLabeledComponent(ternaryLabel, ternaryLevelSpinner, 1, false)

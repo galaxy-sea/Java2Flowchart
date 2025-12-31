@@ -23,20 +23,17 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.application.WriteAction;
+import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.project.DumbAwareAction;
 import com.intellij.openapi.project.Project;
-import com.intellij.psi.PsiDocumentManager;
+import com.intellij.openapi.roots.ProjectFileIndex;
+import com.intellij.openapi.util.TextRange;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VfsUtil;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.openapi.editor.Document;
-import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.vfs.VfsUtilCore;
-import com.intellij.psi.PsiElement;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiJavaFile;
-import com.intellij.psi.PsiMethod;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.*;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
 import plus.wcj.jetbrains.plugins.java2flowchart.extract.FlowExtractor;
@@ -84,12 +81,26 @@ public class GenerateFlowchartAction extends DumbAwareAction {
             return;
         }
 
-        ControlFlowGraph graph = ReadAction.compute(() -> extractor.extract(method, Java2FlowchartSettings.getInstance().getState()));
+        Java2FlowchartSettings.State state = Java2FlowchartSettings.getInstance().getState();
+        ControlFlowGraph graph = ReadAction.compute(() -> extractor.extract(method, state));
         String mermaid = renderer.render(graph, RenderOptions.topDown());
         String source = sourceLink(project, (PsiJavaFile) psiFile, method);
+        String methodSourceBlock = "";
+        if (state.getExportSource()) {
+            String code = methodSource(project, psiFile, method);
+            if (code != null && !code.isBlank()) {
+                methodSourceBlock = """
+                        
+                        ```java
+                        %s
+                        ```
+                        """.formatted(code);
+            }
+        }
         String content = """
                 # %s
                 
+                %s
                 %s
                 
                 ```mermaid
@@ -97,7 +108,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 ```
                 
                 %s
-                """.formatted(method.getName(), source, mermaid, formatSettings(Java2FlowchartSettings.getInstance().getState())).stripTrailing();
+                """.formatted(method.getName(), source, methodSourceBlock, mermaid, formatSettings(state)).stripTrailing();
 
         String basePath = project.getBasePath();
         if (basePath == null) {
@@ -107,7 +118,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
 
         String pkgPath = packagePath((PsiJavaFile) psiFile);
         String classDir = pkgPath + "/" + className((PsiJavaFile) psiFile);
-        String fileName = buildFileName((PsiJavaFile) psiFile, method);
+        String fileName = buildFileName(method);
         try {
             WriteAction.run(() -> saveToFile(basePath, classDir, fileName, content));
             notify(project, Java2FlowchartBundle.message("notify.generated", language, OUTPUT_DIR + "/" + classDir + "/" + fileName), NotificationType.INFORMATION);
@@ -126,10 +137,10 @@ public class GenerateFlowchartAction extends DumbAwareAction {
 
     private String packagePath(PsiJavaFile psiFile) {
         String pkg = psiFile.getPackageName();
-        return pkg == null || pkg.isBlank() ? "default" : pkg.replace('.', '/');
+        return pkg.isBlank() ? "default" : pkg.replace('.', '/');
     }
 
-    private String buildFileName(PsiJavaFile psiFile, PsiMethod method) {
+    private String buildFileName(PsiMethod method) {
         String params = Arrays.stream(method.getParameterList().getParameters())
                 .map(p -> p.getType().getPresentableText())
                 .collect(Collectors.joining(","));
@@ -151,11 +162,6 @@ public class GenerateFlowchartAction extends DumbAwareAction {
         if (project == null || vf == null) {
             return "";
         }
-        Document doc = PsiDocumentManager.getInstance(project).getDocument(psiFile);
-        int line = -1;
-        if (doc != null) {
-            line = doc.getLineNumber(method.getTextOffset()) + 1;
-        }
         String basePath = project.getBasePath();
         VirtualFile baseVf = basePath != null ? LocalFileSystem.getInstance().findFileByPath(basePath) : null;
         String rel = baseVf != null ? VfsUtilCore.getRelativePath(vf, baseVf, '/') : null;
@@ -165,7 +171,6 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 rel = VfsUtilCore.getRelativePath(vf, contentRoot, '/');
             }
         }
-        String display = rel != null ? rel : vf.getPath();
         String target = vf.getPath();
         String fqMethod = psiFile.getPackageName() + "." + className(psiFile) + "." + method.getName() +
                 "(" + Arrays.stream(method.getParameterList().getParameters())
@@ -173,6 +178,19 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 .collect(Collectors.joining(", ")) + ")";
         String linkTarget = rel != null ? rel : target;
         return "[" + fqMethod + "](" + linkTarget + ")";
+    }
+
+    private String methodSource(Project project, PsiFile psiFile, PsiMethod method) {
+        try {
+            Document doc = project != null ? PsiDocumentManager.getInstance(project).getDocument(psiFile) : null;
+            TextRange range = method.getTextRange();
+            if (doc != null && range != null && range.getStartOffset() >= 0 && range.getEndOffset() <= doc.getTextLength()) {
+                return doc.getText(range);
+            }
+            return method.getText();
+        } catch (Throwable ignored) {
+            return method.getText();
+        }
     }
 
     private void saveToFile(String basePath, String packagePath, String fileName, String content) throws IOException {
@@ -192,7 +210,6 @@ public class GenerateFlowchartAction extends DumbAwareAction {
     private String formatSettings(plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.State state) {
         boolean zh = state.getLanguage() == plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings.Language.ZH;
         String title = zh ? "设置" : "Settings";
-        String merge = zh ? "合并相同调用" : "mergeCalls";
         String depth = zh ? "JDK 调用深度" : "jdkApiDepth";
         String callDepth = zh ? "方法调用深度" : "callDepth";
         String ternary = zh ? "三元展开层级" : "ternaryExpandLevel";
@@ -200,19 +217,20 @@ public class GenerateFlowchartAction extends DumbAwareAction {
         String lang = zh ? "语言" : "language";
         String foldFluent = zh ? "合并链式调用" : "foldFluentCalls";
         String foldNested = zh ? "合并嵌套调用" : "foldNestedCalls";
-        String useJavadoc = zh ? "使用Javadoc" : "useJavadoc";
+        String useJavadoc = zh ? "使用JavaDoc" : "useJavadoc";
         String foldSeq = zh ? "折叠顺序调用" : "foldSequentialCalls";
         String foldSet = zh ? "合并连续的 set" : "foldSeqSetters";
         String foldGet = zh ? "合并连续的 get/is" : "foldSeqGetters";
         String foldCtor = zh ? "合并连续的构造方法" : "foldSeqCtors";
+        String exportSource = zh ? "输出方法源码" : "exportSource";
         String regexTitle = zh ? "正则表达式" : "regex patterns";
         return """
                 - %s
+                - %s: %d
+                - %s: %d
+                - %s: %d
+                - %s: %d
                 - %s: %s
-                - %s: %d
-                - %s: %d
-                - %s: %d
-                - %s: %d
                 - %s: %s
                 - %s: %s
                 - %s: %s
@@ -224,7 +242,6 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 %s
                 """.formatted(
                 title,
-                merge, state.getMergeCalls(),
                 depth, state.getJdkApiDepth(),
                 callDepth, state.getCallDepth(),
                 ternary, state.getTernaryExpandLevel(),
@@ -237,6 +254,7 @@ public class GenerateFlowchartAction extends DumbAwareAction {
                 foldSet, state.getFoldSequentialSetters(),
                 foldGet, state.getFoldSequentialGetters(),
                 foldCtor, state.getFoldSequentialCtors(),
+                exportSource, state.getExportSource(),
                 formatSkipRegex(state, regexTitle)
         );
     }

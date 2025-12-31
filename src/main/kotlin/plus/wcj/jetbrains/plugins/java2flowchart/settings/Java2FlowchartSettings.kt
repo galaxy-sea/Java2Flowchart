@@ -40,7 +40,6 @@ class Java2FlowchartSettings : PersistentStateComponent<Java2FlowchartSettings.S
         var foldSequentialCtors: Boolean = true,
         var language: Language = Language.EN,
         var jdkApiDepth: Int = 0,
-        var mergeCalls: Boolean = true,
         /**
          * Call expansion depth. 0 = only selected method, 1 = expand its direct callees, 2+ = deeper, -1 = unlimited.
          */
@@ -68,7 +67,11 @@ class Java2FlowchartSettings : PersistentStateComponent<Java2FlowchartSettings.S
         /**
          * Max label length; -1 means no truncation.
          */
-        var labelMaxLength: Int = 80
+        var labelMaxLength: Int = 80,
+        /**
+         * Whether to include the source code (with comments) of the selected method in the generated Markdown.
+         */
+        var exportSource: Boolean = false
     )
 
     @Tag("SkipRegexEntry")

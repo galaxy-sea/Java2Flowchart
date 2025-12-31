@@ -17,6 +17,7 @@
 - foldSeqSetters (连续 set): true  
 - foldSeqGetters (连续 get/is): true  
 - foldSeqCtors (连续构造方法): true  
+- exportSource (输出方法源码): false  
 - regex patterns (跳过规则): 空
 
 ## 选项详解
@@ -44,6 +45,8 @@
   - foldSeqSetters / foldSeqGetters / foldSeqCtors: 仅在顺序合并开启时生效，分别合并连续的 setter/getter/构造调用（仅同类调用会合并）。  
 - regex patterns  
   - 按正则匹配完整签名 `package.Class#method(paramTypes)`；匹配后该调用会被跳过渲染与展开。默认常见 get/set/is/toString/hashCode 已列出。
+- exportSource  
+  - true: 在生成的 Markdown 中追加所选方法的源码片段（含 Javadoc/注释）；false: 不输出源码。  
 
 ## 解析顺序与开关影响
 
