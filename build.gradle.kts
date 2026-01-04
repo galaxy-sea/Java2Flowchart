@@ -49,6 +49,10 @@ intellijPlatform {
             untilBuild = provider { null }
         }
     }
+
+    publishing {
+        token = providers.gradleProperty("intellijPlatformPublishingToken")
+    }
 }
 tasks {
     // Set the JVM compatibility versions
