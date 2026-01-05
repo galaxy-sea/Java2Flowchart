@@ -50,7 +50,8 @@
         <notificationGroup id="Java2Flowchart" displayType="BALLOON" isLogByDefault="true"/>
         <applicationService serviceImplementation="plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettings"/>
         <applicationConfigurable instance="plus.wcj.jetbrains.plugins.java2flowchart.settings.Java2FlowchartSettingsConfigurable"
-                                 displayName="Java2Flowchart"/>
+                                 displayName="Java2Flowchart"
+                                 groupId="tools"/>
     </extensions>
     <actions>
         <action id="plus.wcj.jetbrains.plugins.java2flowchart.GenerateFlowchartAction"
